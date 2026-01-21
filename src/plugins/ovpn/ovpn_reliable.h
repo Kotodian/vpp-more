@@ -1,0 +1,481 @@
+/*
+ * reliable.h - ovpn reliable header file
+ *
+ * Copyright (c) 2025 <blackfaceuncle@gmail.com>
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at:
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#ifndef __included_ovpn_reliable_h__
+#define __included_ovpn_reliable_h__
+
+#include "ovpn/ovpn_buffer.h"
+#include "ovpn/ovpn_session_id.h"
+#include <vlib/vlib.h>
+
+/*
+ * Used as an upper bound for timeouts
+ */
+#define OVPN_BIG_TIMEOUT (60 * 60 * 24 * 7) /* one week */
+
+/**< The maximum number of packet IDs
+ *   waiting to be acknowledged which can
+ *   be stored in one \c reliable_ack
+ *   structure. */
+#define OVPN_RELIABLE_ACK_SIZE 8
+
+/**< The maximum number of packets that
+ *   the reliability layer for one VPN
+ *   tunnel in one direction can store. */
+#define OVPN_RELIABLE_CAPACITY 12
+
+/**< We retry sending a packet early if
+ *   this many later packets have been
+ *   ACKed. */
+#define OVPN_N_ACK_RETRANSIMIT 3
+
+/**< We retry sending a packet early if
+ *   this many later packets have been
+ *   ACKed. */
+typedef struct ovpn_reliable_ack_t_
+{
+  u32 len;
+  u32 packet_id[OVPN_RELIABLE_ACK_SIZE];
+} ovpn_reliable_ack_t;
+
+/* The size of the ACK header: 1 byte count + session ID (if n>0) + packet IDs */
+#define OVPN_ACK_SIZE(n)                                                      \
+  (sizeof (u8) + ((n) ? OVPN_SID_SIZE : 0) + sizeof (u32) * (n))
+
+typedef struct ovpn_reliable_entry_t_
+{
+  u8 active;
+  f64 timeout;
+  f64 next_try;
+  u32 packet_id;
+  u32 n_acks;
+  u8 opcode;
+  u32 buf_index;
+} ovpn_reliable_entry_t;
+
+typedef struct ovpn_reliable_t_
+{
+  int size;
+  f64 initial_timeout;
+  u32 packet_id;
+  /* Offset of the bufs in the reliable_entry array */
+  int offset;
+  /* dont xmit until reliable_schedule_now is called */
+  u8 hold;
+
+  ovpn_reliable_entry_t array[OVPN_RELIABLE_CAPACITY];
+} ovpn_reliable_t;
+
+/**
+ * Read an acknowledgment record from a received packet.
+ *
+ * This function reads the packet ID acknowledgment record from the packet
+ * contained in \a buf.  If the record contains acknowledgments, these are
+ * stored in \a ack.  This function also compares the packet's session ID
+ * with the expected session ID \a sid, which should be equal.
+ *
+ * @param ack The acknowledgment structure in which received
+ *     acknowledgments are to be stored.
+ * @param buf The buffer containing the packet.
+ * @param sid The expected session ID to compare to the session ID in
+ *     the packet.
+ *
+ * @return
+ * @li 1, if processing was successful.
+ * @li 0, if an error occurs during processing.
+ */
+u8 ovpn_reliable_ack_read (ovpn_reliable_ack_t *ack, ovpn_reli_buffer_t *buf,
+			   ovpn_session_id_t *sid);
+
+/**
+ * Parse an acknowledgment record from a received packet.
+ *
+ * This function parses the packet ID acknowledgment record from the packet
+ * contained in \a buf.  If the record contains acknowledgments, these are
+ * stored in \a ack.  This function also extracts packet's session ID
+ * and returns it in \a session_id_remote
+ *
+ * @param ack The acknowledgment structure in which received
+ *     acknowledgments are to be stored.
+ * @param buf The buffer containing the packet.
+ * @param session_id_remote The parsed remote session id. This field is
+ *                          is only filled if ack->len >= 1
+ * @return
+ * @li 1, if processing was successful.
+ * @li 0, if an error occurs during processing.
+ */
+u8 ovpn_reliable_ack_parse (ovpn_reli_buffer_t *buf, ovpn_reliable_ack_t *ack,
+			    ovpn_session_id_t *sid_remote);
+
+/**
+ * Remove acknowledged packets from a reliable structure.
+ *
+ * @param rel The reliable structure storing sent packets.
+ * @param ack The acknowledgment structure containing received
+ *     acknowledgments.
+ */
+void ovpn_reliable_send_purge (ovpn_reliable_t *rel, ovpn_reliable_ack_t *ack);
+
+/**************************************************************************/
+/** @name Functions for processing outgoing acknowledgments
+ *  @{ */
+
+/**
+ * Check whether an acknowledgment structure contains any
+ *     packet IDs to be acknowledged.
+ *
+ * @param ack The acknowledgment structure to check.
+ *
+ * @return
+ * @li 1, if the acknowledgment structure is empty.
+ * @li 0, if there are packet IDs to be acknowledged.
+ */
+
+always_inline u8
+ovpn_reliable_ack_empty (ovpn_reliable_ack_t *ack)
+{
+  return ack->len == 0;
+}
+
+always_inline u8
+ovpn_reliable_ack_outstanding (ovpn_reliable_ack_t *ack)
+{
+  return ack->len > 0;
+}
+
+/**
+ * Write a packet ID acknowledgment record to a buffer.
+ *
+ * @param ack The acknowledgment structure containing packet IDs to be
+ *     acknowledged.
+ * @param ack_mru List of packets we have acknowledged before. Packets from
+ *                \c ack will be moved here and if there is space in our
+ *                ack structure we will fill it with packets from this
+ * @param buf The buffer into which the acknowledgment record will be
+ *     written.
+ * @param sid The session ID of the VPN tunnel associated with the
+ *     packet IDs to be acknowledged.
+ * @param max The maximum number of acknowledgments to be written in
+ *     the record.
+ * @param prepend If true, prepend the acknowledgment record in the
+ *     buffer; if false, write into the buffer's current position.
+ *
+ * @return
+ * @li 0, if processing was successful.
+ * @li -1, if an error occurs during processing.
+ */
+
+int ovpn_reliable_ack_write (ovpn_reliable_ack_t *ack,
+			     ovpn_reliable_ack_t *ack_mru,
+			     ovpn_reli_buffer_t *buf, ovpn_session_id_t *sid,
+			     u32 max, u8 prepend);
+
+/**
+ * Initialize a reliable structure.
+ *
+ * @param rel The reliable structure to initialize.
+ * @param buf_size The size of the buffers in which packets will be
+ *     stored.
+ * @param offset The size of reserved space at the beginning of the
+ *     buffers to allow efficient header prepending.
+ * @param array_size The number of packets that this reliable
+ *     structure can store simultaneously.
+ * @param hold description
+ */
+void ovpn_reliable_init (ovpn_reliable_t *rel, int buf_size, int offset,
+			 int array_size, u8 hold);
+
+/**
+ * Free allocated memory associated with a reliable structure and the pointer
+ * itself.
+ * Does nothing if rel is NULL.
+ *
+ * @param rel The reliable structured to clean up.
+ */
+void ovpn_reliable_free (ovpn_reliable_t *rel);
+
+/** @name Functions for inserting incoming packets
+ *  @{ */
+
+/**
+ * Check whether a reliable structure has any free buffers
+ *     available for use.
+ *
+ * @param rel The reliable structure to check.
+ *
+ * @return
+ * @li 1, if at least one buffer is available for use.
+ * @li 0, if all the buffers are active.
+ */
+u8 ovpn_reliable_can_get (const ovpn_reliable_t *rel);
+
+/**
+ * Check that a received packet's ID is not a replay.
+ *
+ * @param rel The reliable structure for handling this VPN tunnel's
+ *     received packets.
+ * @param id The packet ID of the received packet.
+ *
+ * @return
+ * @li 1, if the packet ID is not a replay.
+ * @li 0, if the packet ID is a replay.
+ */
+
+u8 ovpn_reliable_not_replay (ovpn_reliable_t *rel, u32 id);
+
+/**
+ * Check that a received packet's ID can safely be stored in
+ *     the reliable structure's processing window.
+ *
+ * This function checks the difference between the received packet's ID
+ * and the lowest non-acknowledged packet ID in the given reliable
+ * structure.  If that difference is larger than the total number of
+ * packets which can be stored, then this packet cannot be stored safely,
+ * because the reliable structure could possibly fill up without leaving
+ * room for all intervening packets.  In that case, this received packet
+ * could break the reliable structure's sequentiality, and must therefore
+ * be discarded.
+ *
+ * @param rel The reliable structure for handling this VPN tunnel's
+ *     received packets.
+ * @param id The packet ID of the received packet.
+ *
+ * @return
+ * @li 1, if the packet can safely be stored.
+ * @li 0, if the packet does not fit safely in the reliable
+ *     structure's processing window.
+ */
+
+u8 ovpn_reliable_wont_break_sequentiality (ovpn_reliable_t *rel, u32 id);
+
+/**
+ * Read the packet ID of a received packet.
+ *
+ * @param buf The buffer containing the received packet.
+ * @param pid A pointer where the packet's packet ID will be written.
+ *
+ * @return
+ * @li 1, if processing was successful.
+ * @li 0, if an error occurs during processing.
+ */
+u8 ovpn_reliable_ack_read_packet_id (ovpn_reli_buffer_t *buf, u32 *pid);
+
+/**
+ * Get the buffer of a free %reliable entry in which to store a
+ *     packet.
+ *
+ * @param rel The reliable structure in which to search for a free
+ *     entry.
+ *
+ * @return A pointer to a buffer of a free entry in the \a rel
+ *     reliable structure.  If there are no free entries available, this
+ *     function returns NULL.
+ */
+
+ovpn_reli_buffer_t *ovpn_reliable_get_buf (ovpn_reliable_t *rel);
+
+/**
+ * Mark the %reliable entry associated with the given buffer as active
+ * incoming.
+ *
+ * @param rel The reliable structure associated with this packet.
+ * @param buf The buffer into which the packet has been copied.
+ * @param pid The packet's packet ID.
+ * @param opcode The packet's opcode.
+ */
+
+void ovpn_reliable_mark_active_incoming (ovpn_reliable_t *rel,
+					 ovpn_reli_buffer_t *buf, u32 pid,
+					 u8 opcode);
+
+/**
+ * Record a packet ID for later acknowledgment.
+ *
+ * @param ack The acknowledgment structure which stores this VPN
+ *     tunnel's packet IDs for later acknowledgment.
+ * @param pid The packet ID of the received packet which should be
+ *     acknowledged.
+ *
+ * @return
+ * @li 1, if the packet ID was added to \a ack.
+ * @li 0, if the packet ID was already present in \a ack or \a ack
+ *     has no free space to store any more packet IDs.
+ */
+u8 ovpn_reliable_ack_acknowledge_packet_id (ovpn_reliable_ack_t *ack, u32 pid);
+
+/** @name Functions for extracting incoming packets
+ *  @{ */
+
+/**
+ * Get the buffer of the next sequential and active entry.
+ *
+ * @param rel The reliable structure from which to retrieve the
+ *     buffer.
+ *
+ * @return A pointer to the entry with the next sequential key ID.
+ *     If no such entry is present, this function  returns NULL.
+ */
+ovpn_reliable_entry_t *
+ovpn_reliable_get_entry_sequenced (ovpn_reliable_t *rel);
+
+/**
+ * Copies the first n acks from \c ack to \c ack_mru
+ *
+ * @param ack The reliable structure to copy the acks from
+ * @param ack_mru The reliable structure to insert the acks into
+ * @param n The number of ACKS to copy
+ */
+void ovpn_reliable_copy_acks_to_mru (ovpn_reliable_ack_t *ack,
+				     ovpn_reliable_ack_t *ack_mru, int n);
+
+/**
+ * Remove an entry from a reliable structure.
+ *
+ * @param rel The reliable structure associated with the given buffer.
+ * @param buf The buffer of the reliable entry which is to be removed.
+ */
+void ovpn_reliable_mark_deleted (ovpn_reliable_t *rel,
+				 ovpn_reli_buffer_t *buf);
+
+/**
+ * Get the buffer of free reliable entry and check whether the
+ *     outgoing acknowledgment sequence is still okay.
+ *
+ * @param rel The reliable structure in which to search for a free
+ *     entry.
+ *
+ * @return A pointer to a buffer of a free entry in the \a rel
+ *     reliable structure.  If there are no free entries available, this
+ *     function returns NULL.  If the outgoing acknowledgment sequence is
+ *     broken, this function also returns NULL.
+ */
+
+ovpn_reli_buffer_t *
+ovpn_reliable_get_buf_output_sequenced (ovpn_reliable_t *rel);
+
+/**
+ * Counts the number of free buffers in output that can be potentially used
+ * for sending
+ *
+ *  @param rel The reliable structure in which to search for a free
+ *     entry.
+ *
+ *  @return the number of buffer that are available for sending without
+ *             breaking ack sequence
+ * */
+int ovpn_reliable_get_num_output_sequenced_available (ovpn_reliable_t *rel);
+
+/**
+ * Mark the reliable entry associated with the given buffer as
+ *     active outgoing.
+ *
+ * @param rel The reliable structure for handling this VPN tunnel's
+ *     outgoing packets.
+ * @param buf The buffer previously returned by \c
+ *     reliable_get_buf_output_sequenced() into which the packet has been
+ *     copied.
+ * @param opcode The packet's opcode.
+ */
+void ovpn_reliable_mark_active_outgoing (ovpn_reliable_t *rel,
+					 ovpn_reli_buffer_t *buf, u8 opcode);
+
+/**
+ * Check whether a reliable structure has any active entries
+ *     ready to be (re)sent.
+ *
+ * @param vm The main structure of the VPP instance.
+ * @param rel The reliable structure to check.
+ *
+ * @return
+ * @li 1, if there are active entries ready to be (re)sent
+ * @li 0, if there are no active entries, or the active entries
+ *     are not yet ready for resending.
+ */
+u8 ovpn_reliable_can_send (vlib_main_t *vm, ovpn_reliable_t *rel);
+
+/**
+ * Get the next packet to send to the remote peer.
+ *
+ * This function looks for the active entry ready for (re)sending with the
+ * lowest packet ID, and returns the buffer associated with it.  This
+ * function also resets the timeout after which that entry will become
+ * ready for resending again.
+ *
+ * @param vm The main structure of the VPP instance.
+ * @param rel The reliable structure to check.
+ * @param opcode A pointer to an integer in which this function will
+ *     store the opcode of the next packet to be sent.
+ *
+ * @return A pointer to the buffer of the next entry to be sent, or
+ *     NULL if there are no entries ready for (re)sending present in the
+ *     reliable structure.  If a valid pointer is returned, then \a opcode
+ *     will point to the opcode of that packet.
+ */
+ovpn_reli_buffer_t *ovpn_reliable_send (vlib_main_t *vm, ovpn_reliable_t *rel,
+					u8 *opcode);
+
+/**
+ * Check whether a reliable structure is empty.
+ *
+ * @param rel The reliable structure to check.
+ *
+ * @return
+ * @li 1, if there are no active entries in the given reliable
+ *     structure.
+ * @li 0, if there is at least one active entry present.
+ */
+u8 ovpn_reliable_empty (ovpn_reliable_t *rel);
+
+/**
+ * Determined how many seconds until the earliest resend should
+ *     be attempted.
+ *
+ * @param vm The main structure of the VPP instance.
+ * @param rel The reliable structured to check.
+ *
+ * @return The interval in seconds until the earliest resend attempt
+ *     of the outgoing packets stored in the \a rel reliable structure. If
+ *     the next time for attempting resending of one or more packets has
+ *     already passed, this function will return 0.
+ */
+f64 ovpn_reliable_send_timeout (vlib_main_t *vm, ovpn_reliable_t *rel);
+
+/**
+ * Reschedule all entries of a reliable structure to be ready
+ *     for (re)sending immediately.
+ *
+ * @param vm The main structure of the VPP instance.
+ * @param rel The reliable structure of which the entries should be
+ *     modified.
+ */
+void ovpn_reliable_schedule_now (vlib_main_t *vm, ovpn_reliable_t *rel);
+
+/* set sending timeout (after this time we send again until ACK)*/
+always_inline void
+ovpn_reliable_set_timeout (ovpn_reliable_t *rel, f64 timeout)
+{
+  rel->initial_timeout = timeout;
+}
+
+#endif /* __included_ovpn_reliable_h__ */
+
+/*
+ * fd.io coding-style-patch-verification: ON
+ *
+ * Local Variables:
+ * eval: (c-set-style "gnu")
+ * End:
+ */

@@ -12,8 +12,13 @@ RUN echo "I'm building for ${TARGETARCH}" \
 && tar -xzf /tmp/go.tar.gz -C /usr/local \
 && rm /tmp/go.tar.gz
 
-RUN wget -t 2 "https://download.docker.com/linux/ubuntu/dists/${CODENAME}/pool/stable/${TARGETARCH}/docker-ce-cli_28.3.2-1~ubuntu.${UBUNTU_VERSION}~${CODENAME}_${TARGETARCH}.deb" \
--O /tmp/docker-ce-cli.deb
-RUN dpkg -i /tmp/docker-ce-cli.deb
+# Install Docker CLI from official repository
+RUN install -m 0755 -d /etc/apt/keyrings \
+&& curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
+&& chmod a+r /etc/apt/keyrings/docker.asc \
+&& echo "deb [arch=${TARGETARCH} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${CODENAME} stable" > /etc/apt/sources.list.d/docker.list \
+&& apt-get update \
+&& apt-get install -y docker-ce-cli \
+&& rm -rf /var/lib/apt/lists/*
 
 RUN ln -s /usr/local/go/bin/go /usr/bin/go

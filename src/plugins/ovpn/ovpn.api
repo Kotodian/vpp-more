@@ -1,0 +1,451 @@
+/* Hey Emacs use -*- mode: C -*- */
+/*
+ * Copyright (c) 2025 <blackfaceuncle@gmail.com>
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at:
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+option version = "1.0.0";
+
+import "vnet/interface_types.api";
+import "vnet/ip/ip_types.api";
+
+/** \brief OpenVPN crypto mode enumeration
+    @param OVPN_CRYPTO_MODE_STATIC_KEY - Static key mode (--secret)
+    @param OVPN_CRYPTO_MODE_TLS - TLS mode with certificates
+    @param OVPN_CRYPTO_MODE_TLS_AUTH - TLS mode with HMAC authentication
+    @param OVPN_CRYPTO_MODE_TLS_CRYPT - TLS mode with encryption
+*/
+enum ovpn_crypto_mode : u8
+{
+  OVPN_CRYPTO_MODE_STATIC_KEY = 0,
+  OVPN_CRYPTO_MODE_TLS = 1,
+  OVPN_CRYPTO_MODE_TLS_AUTH = 2,
+  OVPN_CRYPTO_MODE_TLS_CRYPT = 3,
+};
+
+/** \brief OpenVPN peer state enumeration (for API)
+    Note: Values must match ovpn_peer_state_t in ovpn_peer.h
+*/
+enum ovpn_api_peer_state : u8
+{
+  OVPN_API_PEER_STATE_INITIAL = 0,
+  OVPN_API_PEER_STATE_HANDSHAKE = 1,
+  OVPN_API_PEER_STATE_ESTABLISHED = 2,
+  OVPN_API_PEER_STATE_REKEYING = 3,
+  OVPN_API_PEER_STATE_DEAD = 4,
+};
+
+/** \brief OpenVPN interface structure
+    @param sw_if_index - Software interface index
+    @param instance_id - Instance pool index
+    @param local_addr - Local IP address for binding
+    @param local_port - Local UDP port
+    @param table_id - FIB table ID
+    @param crypto_mode - Crypto mode (static key, TLS, etc.)
+    @param dev_name - Device name (up to 32 chars)
+    @param is_tun - 1 for TUN mode, 0 for TAP mode
+    @param mtu - Tunnel MTU
+    @param mssfix - MSS clamping value
+    @param fragment_size - Fragment size (0 if disabled)
+    @param keepalive_ping - Keepalive ping interval
+    @param keepalive_timeout - Keepalive timeout
+    @param renegotiate_seconds - Renegotiate interval
+    @param max_clients - Maximum clients
+    @param pool_start - IP pool start
+    @param pool_end - IP pool end
+    @param client_to_client - Client-to-client enabled
+    @param cipher_name - Active cipher name
+*/
+typedef ovpn_interface
+{
+  vl_api_interface_index_t sw_if_index;
+  u32 instance_id;
+  vl_api_address_t local_addr;
+  u16 local_port;
+  u32 table_id;
+  vl_api_ovpn_crypto_mode_t crypto_mode;
+  string dev_name[32];
+  bool is_tun;
+  u16 mtu;
+  u16 mssfix;
+  u16 fragment_size;
+  u32 keepalive_ping;
+  u32 keepalive_timeout;
+  u32 renegotiate_seconds;
+  u32 max_clients;
+  vl_api_address_t pool_start;
+  vl_api_address_t pool_end;
+  bool client_to_client;
+  string cipher_name[32];
+};
+
+/** \brief Create OpenVPN interface
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param local_addr - Local IP address for binding
+    @param local_port - Local UDP port (default 1194)
+    @param table_id - FIB table ID (0 for default)
+    @param dev_name - Device name (optional, auto-generated if empty)
+    @param is_tun - 1 for TUN mode (L3, IP packets), 0 for TAP mode (L2, Ethernet frames)
+    @param crypto_mode - Crypto mode
+    @param static_key - Static key (256 bytes, for static key mode)
+    @param static_key_direction - Key direction (0 or 1)
+    @param mtu - Tunnel MTU (default 1500)
+    @param mssfix - MSS clamping value (0 to disable, default 0)
+    @param fragment_size - Fragment size (0 to disable, default 0)
+    @param keepalive_ping - Keepalive ping interval seconds (default 10)
+    @param keepalive_timeout - Keepalive timeout seconds (default 120)
+    @param renegotiate_seconds - Renegotiate interval (default 3600)
+    @param handshake_window - Handshake timeout seconds (default 60)
+    @param replay_window - Replay protection window size (default 64)
+    @param replay_time - Replay time window seconds (default 15)
+    @param max_clients - Maximum number of clients (default 1024)
+    @param pool_start - Client IP pool start address
+    @param pool_end - Client IP pool end address
+    @param client_to_client - Allow client-to-client traffic (default false)
+    @param cipher_name - Cipher name (e.g., "AES-256-GCM")
+    @param data_ciphers - Colon-separated cipher list for negotiation
+    @param ca_cert - CA certificate (PEM format, for TLS modes)
+    @param server_cert - Server certificate (PEM format)
+    @param server_key - Server private key (PEM format)
+    @param dh_params - DH parameters (PEM format)
+    @param tls_auth_key - TLS-Auth key (for TLS_AUTH mode)
+    @param tls_crypt_key - TLS-Crypt key (for TLS_CRYPT mode)
+    @param tls_crypt_v2_key - TLS-Crypt-V2 server key
+    @param crl - Certificate revocation list (PEM format)
+*/
+define ovpn_interface_create
+{
+  u32 client_index;
+  u32 context;
+  vl_api_address_t local_addr;
+  u16 local_port [default=1194];
+  u32 table_id [default=0];
+  string dev_name[32];
+  bool is_tun [default=true];
+  vl_api_ovpn_crypto_mode_t crypto_mode;
+  u8 static_key[256];
+  u8 static_key_direction;
+
+  /* Network options */
+  u16 mtu [default=1500];
+  u16 mssfix [default=0];
+  u16 fragment_size [default=0];
+
+  /* Timing options */
+  u32 keepalive_ping [default=10];
+  u32 keepalive_timeout [default=120];
+  u32 renegotiate_seconds [default=3600];
+  u32 handshake_window [default=60];
+
+  /* Replay protection */
+  u32 replay_window [default=64];
+  u32 replay_time [default=15];
+
+  /* Client pool */
+  u32 max_clients [default=1024];
+  vl_api_address_t pool_start;
+  vl_api_address_t pool_end;
+  bool client_to_client [default=false];
+
+  /* Cipher options */
+  string cipher_name[32];
+  string data_ciphers[256];
+
+  /* Certificate/key lengths */
+  u32 ca_cert_len;
+  u32 server_cert_len;
+  u32 server_key_len;
+  u32 dh_params_len;
+  u32 tls_auth_key_len;
+  u32 tls_crypt_key_len;
+  u32 tls_crypt_v2_key_len;
+  u32 crl_len;
+
+  /* Variable length data: ca_cert, server_cert, server_key, dh_params,
+     tls_auth_key, tls_crypt_key, tls_crypt_v2_key, crl concatenated */
+  u8 certs_and_keys[];
+};
+
+/** \brief Create OpenVPN interface reply
+    @param context - sender context, to match reply w/ request
+    @param retval - return status
+    @param sw_if_index - Software interface index of created interface
+    @param instance_id - Instance ID
+*/
+define ovpn_interface_create_reply
+{
+  u32 context;
+  i32 retval;
+  vl_api_interface_index_t sw_if_index;
+  u32 instance_id;
+};
+
+/** \brief Delete OpenVPN interface
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param sw_if_index - Software interface index
+*/
+autoreply define ovpn_interface_delete
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index;
+};
+
+/** \brief Dump OpenVPN interfaces
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param sw_if_index - Interface index to dump (~0 for all)
+*/
+define ovpn_interface_dump
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index [default=0xffffffff];
+};
+
+/** \brief OpenVPN interface details
+    @param context - sender context, to match reply w/ request
+    @param interface - Interface details
+    @param num_peers - Number of connected peers
+*/
+define ovpn_interface_details
+{
+  u32 context;
+  vl_api_ovpn_interface_t interface;
+  u32 num_peers;
+};
+
+/** \brief OpenVPN peer structure
+    @param peer_id - Peer ID
+    @param instance_id - Associated instance ID
+    @param sw_if_index - Associated interface sw_if_index
+    @param remote_addr - Remote endpoint address
+    @param remote_port - Remote endpoint port
+    @param virtual_ip - Assigned virtual IP
+    @param state - Peer state
+    @param rx_bytes - Received bytes
+    @param tx_bytes - Transmitted bytes
+    @param rx_packets - Received packets
+    @param tx_packets - Transmitted packets
+    @param established_time - Time when tunnel was established (unix timestamp)
+    @param last_rx_time - Last receive time (unix timestamp)
+*/
+typedef ovpn_peer
+{
+  u32 peer_id;
+  u32 instance_id;
+  vl_api_interface_index_t sw_if_index;
+  vl_api_address_t remote_addr;
+  u16 remote_port;
+  vl_api_address_t virtual_ip;
+  vl_api_ovpn_api_peer_state_t state;
+  u64 rx_bytes;
+  u64 tx_bytes;
+  u64 rx_packets;
+  u64 tx_packets;
+  f64 established_time;
+  f64 last_rx_time;
+};
+
+/** \brief Dump OpenVPN peers
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param sw_if_index - Interface to dump peers for (~0 for all)
+    @param peer_id - Specific peer ID to dump (~0 for all)
+*/
+define ovpn_peers_dump
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index [default=0xffffffff];
+  u32 peer_id [default=0xffffffff];
+};
+
+/** \brief OpenVPN peer details
+    @param context - sender context, to match reply w/ request
+    @param peer - Peer details
+*/
+define ovpn_peers_details
+{
+  u32 context;
+  vl_api_ovpn_peer_t peer;
+};
+
+/** \brief Remove OpenVPN peer
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param sw_if_index - Interface sw_if_index
+    @param peer_id - Peer ID to remove
+*/
+autoreply define ovpn_peer_remove
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index;
+  u32 peer_id;
+};
+
+/*
+ * Management Interface API
+ */
+
+/** \brief Enable OpenVPN management interface (TCP)
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param instance_id - OpenVPN instance ID
+    @param bind_addr - IP address to bind to (typically 127.0.0.1)
+    @param bind_port - TCP port to listen on (default 7505)
+    @param password - Optional management password
+*/
+autoreply define ovpn_mgmt_enable_tcp
+{
+  u32 client_index;
+  u32 context;
+  u32 instance_id;
+  vl_api_address_t bind_addr;
+  u16 bind_port [default=7505];
+  string password[64];
+};
+
+/** \brief Enable OpenVPN management interface (Unix socket)
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param instance_id - OpenVPN instance ID
+    @param socket_path - Path to Unix domain socket
+    @param password - Optional management password
+*/
+autoreply define ovpn_mgmt_enable_unix
+{
+  u32 client_index;
+  u32 context;
+  u32 instance_id;
+  string socket_path[256];
+  string password[64];
+};
+
+/** \brief Disable OpenVPN management interface
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param instance_id - OpenVPN instance ID
+*/
+autoreply define ovpn_mgmt_disable
+{
+  u32 client_index;
+  u32 context;
+  u32 instance_id;
+};
+
+/** \brief OpenVPN management interface status
+    @param instance_id - Instance ID
+    @param bind_addr - UDP bind address
+    @param bind_port - UDP bind port
+    @param num_clients - Number of connected management clients
+    @param password_required - 1 if password is required
+    @param hold - 1 if hold is enabled
+*/
+typedef ovpn_mgmt_status
+{
+  u32 instance_id;
+  vl_api_address_t bind_addr;
+  u16 bind_port;
+  u32 num_clients;
+  bool password_required;
+  bool hold;
+};
+
+/** \brief Dump OpenVPN management interfaces
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param instance_id - Instance ID to dump (~0 for all)
+*/
+define ovpn_mgmt_dump
+{
+  u32 client_index;
+  u32 context;
+  u32 instance_id [default=0xffffffff];
+};
+
+/** \brief OpenVPN management interface details
+    @param context - sender context, to match reply w/ request
+    @param status - Management status
+*/
+define ovpn_mgmt_details
+{
+  u32 context;
+  vl_api_ovpn_mgmt_status_t status;
+};
+
+/** \brief OpenVPN peer event type enumeration
+*/
+enum ovpn_peer_event_type : u8
+{
+  OVPN_PEER_EVENT_CONNECTED = 0,
+  OVPN_PEER_EVENT_DISCONNECTED = 1,
+};
+
+service {
+  rpc want_ovpn_peer_events returns want_ovpn_peer_events_reply
+    events ovpn_peer_event;
+};
+
+/** \brief Register for OpenVPN peer events
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param enable_disable - 1 to enable, 0 to disable
+    @param pid - process ID
+    @param instance_id - Instance ID to monitor (~0 for all)
+*/
+autoreply define want_ovpn_peer_events
+{
+  u32 client_index;
+  u32 context;
+  bool enable_disable;
+  u32 pid;
+  u32 instance_id [default=0xffffffff];
+};
+
+/** \brief OpenVPN peer event notification
+    @param client_index - opaque cookie to identify the sender
+    @param pid - process ID of the subscriber
+    @param event_type - type of event (connected/disconnected)
+    @param instance_id - Instance ID
+    @param peer_id - Peer ID
+    @param remote_addr - Remote IP address
+    @param remote_port - Remote UDP port
+    @param virtual_addr - Assigned virtual IP address
+    @param common_name - Client certificate CN (up to 64 chars)
+    @param bytes_received - Total bytes received from peer
+    @param bytes_sent - Total bytes sent to peer
+*/
+define ovpn_peer_event
+{
+  u32 client_index;
+  u32 pid;
+  vl_api_ovpn_peer_event_type_t event_type;
+  u32 instance_id;
+  u32 peer_id;
+  vl_api_address_t remote_addr;
+  u16 remote_port;
+  vl_api_address_t virtual_addr;
+  string common_name[64];
+  u64 bytes_received;
+  u64 bytes_sent;
+};
+
+/*
+ * Local Variables:
+ * eval: (c-set-style "gnu")
+ * End:
+ */
