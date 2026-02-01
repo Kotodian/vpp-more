@@ -485,6 +485,7 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
   f64 now = vlib_time_now (vm);
   ovpn_per_thread_crypto_t *ptd = ovpn_crypto_get_ptd (thread_index);
   ovpn_instance_t *instances[VLIB_FRAME_SIZE];
+  u32 n_vectors = frame->n_vectors;
 
   /* Packet IDs for replay tracking (indexed by buffer position) */
   u32 packet_ids[VLIB_FRAME_SIZE];
@@ -500,18 +501,21 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
   u32 decrypt_count = 0;
 
   from = vlib_frame_vector_args (frame);
-  n_left_from = frame->n_vectors;
+  n_left_from = n_vectors;
 
   vlib_get_buffers (vm, from, bufs, n_left_from);
   b = bufs;
   next = nexts;
 
-  /* Initialize tracking arrays */
-  clib_memset (peers, 0, sizeof (peers));
-  clib_memset (crypto_contexts, 0, sizeof (crypto_contexts));
-  clib_memset (rx_bytes, 0, sizeof (rx_bytes));
+  /* Initialize tracking arrays (only the active frame range). */
+  if (n_vectors > 0)
+    {
+      clib_memset (peers, 0, n_vectors * sizeof (peers[0]));
+      clib_memset (crypto_contexts, 0, n_vectors * sizeof (crypto_contexts[0]));
+      clib_memset (rx_bytes, 0, n_vectors * sizeof (rx_bytes[0]));
+      clib_memset (instances, 0, n_vectors * sizeof (instances[0]));
+    }
   clib_memset (error_counts, 0, sizeof (error_counts));
-  clib_memset (instances, 0, sizeof (instances));
 
   /* Reset per-thread crypto state for batch processing */
   ovpn_crypto_reset_ptd (ptd);
@@ -536,6 +540,9 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
       ovpn_peer_t *peer = NULL;
       ovpn_crypto_context_t *crypto = NULL;
       int rv;
+      u32 buf_idx = b - bufs;
+      ip_address_t remote_addr = { 0 };
+      u16 remote_port = 0;
 
       /* Get packet data - buffer should point to OpenVPN payload (after UDP)
        */
@@ -558,11 +565,9 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
        * Look up instance by destination port from UDP header.
        * Each instance has a unique port number.
        */
-      u32 buf_idx = b - bufs;
       ovpn_instance_t *inst = NULL;
       {
-	u8 *current = vlib_buffer_get_current (b0);
-	u8 *udp_start = current - sizeof (udp_header_t);
+	u8 *udp_start = data - sizeof (udp_header_t);
 	udp_header_t *udp = (udp_header_t *) udp_start;
 	u16 dst_port = clib_net_to_host_u16 (udp->dst_port);
 	inst = ovpn_instance_get_by_port (dst_port);
@@ -572,7 +577,6 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 	  error = OVPN_INPUT_ERROR_INSTANCE_NOT_FOUND;
 	  goto trace;
 	}
-      instances[buf_idx] = inst;
 
       /*
        * Legacy static key mode without opcode (P2P mode).
@@ -591,9 +595,8 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
        * If the first byte is a valid P_DATA_V1 or P_DATA_V2 opcode,
        * let the normal opcode processing handle it.
        */
-      u8 possible_opcode = (op_byte >> 3);
-      int looks_like_data_opcode = (possible_opcode == OVPN_OP_DATA_V1 ||
-				    possible_opcode == OVPN_OP_DATA_V2);
+      int looks_like_data_opcode = (opcode == OVPN_OP_DATA_V1 ||
+				    opcode == OVPN_OP_DATA_V2);
 
       if (PREDICT_FALSE (inst->options.static_key_mode &&
 			 !OVPN_CIPHER_IS_AEAD (inst->cipher_alg) &&
@@ -601,9 +604,6 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 			 len >= (OVPN_CBC_HMAC_SIZE + OVPN_IV_SIZE + 16)))
 	{
 	  /* This is a static key mode data packet without opcode */
-	  ip_address_t remote_addr = { 0 };
-	  u16 remote_port = 0;
-
 	  /* Extract remote endpoint using helper */
 	  ovpn_extract_remote_endpoint (b0, is_ip6, &remote_addr, &remote_port);
 
@@ -666,7 +666,9 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 	    }
 
 	  /* Store peer and rx bytes for batched counter update */
-	  u32 pkt_bytes = vlib_buffer_length_in_chain (vm, b0);
+	  u32 pkt_bytes =
+	    (b0->flags & VLIB_BUFFER_NEXT_PRESENT) ?
+	    vlib_buffer_length_in_chain (vm, b0) : b0->current_length;
 	  peers[buf_idx] = peer;
 	  rx_bytes[buf_idx] = pkt_bytes;
 
@@ -702,13 +704,17 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 		  goto trace;
 		}
 
-	      ovpn_data_v2_header_t *hdr = (ovpn_data_v2_header_t *) data;
-	      peer_id = ovpn_data_v2_get_peer_id (hdr);
+	  ovpn_data_v2_header_t *hdr = (ovpn_data_v2_header_t *) data;
+	  peer_id = ovpn_data_v2_get_peer_id (hdr);
 
-	      /* NAT/float: Extract remote address for change detection */
-	      u32 buf_idx = b - bufs;
-	      ovpn_extract_remote_endpoint (b0, is_ip6, &remote_addrs[buf_idx],
-					    &remote_ports[buf_idx]);
+	  /* Extract remote endpoint (float/static-key handling) */
+	  ovpn_extract_remote_endpoint (b0, is_ip6, &remote_addr,
+					&remote_port);
+	  if (inst->options.float_enabled)
+	    {
+	      ip_address_copy (&remote_addrs[buf_idx], &remote_addr);
+	      remote_ports[buf_idx] = remote_port;
+	    }
 	    }
 	  else
 	    {
@@ -726,16 +732,15 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 		}
 
 	      /* Extract remote address from outer IP header */
-	      ip_address_t remote_addr;
-	      u16 remote_port = 0;
-	      u32 buf_idx = b - bufs;
-
 	      ovpn_extract_remote_endpoint (b0, is_ip6, &remote_addr,
 					    &remote_port);
 
-	      /* Store remote address for NAT/float detection */
-	      ip_address_copy (&remote_addrs[buf_idx], &remote_addr);
-	      remote_ports[buf_idx] = remote_port;
+	      /* Store remote address for NAT/float detection only if enabled */
+	      if (inst->options.float_enabled)
+		{
+		  ip_address_copy (&remote_addrs[buf_idx], &remote_addr);
+		  remote_ports[buf_idx] = remote_port;
+		}
 
 	      /* Lookup peer by remote endpoint */
 	      peer = ovpn_peer_lookup_by_remote (&inst->multi_context.peer_db,
@@ -775,17 +780,14 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 	   * This happens when client's NAT rebinds to a different port/IP.
 	   * Address mismatch is rare, so use PREDICT_FALSE for optimization.
 	   */
-	  if (peer && remote_addrs[buf_idx].version != 0 &&
-	      PREDICT_FALSE (ip_address_cmp (&peer->remote_addr, &remote_addrs[buf_idx]) != 0 ||
-			     peer->remote_port != remote_ports[buf_idx]))
+	  if (PREDICT_FALSE (!inst->options.float_enabled) && peer &&
+	      PREDICT_FALSE (peer->remote_port != remote_port ||
+			     ip_address_cmp (&peer->remote_addr, &remote_addr) != 0))
 	    {
 	      /* Address mismatch - reject if float is disabled */
-	      if (!inst->options.float_enabled)
-		{
-		  error = OVPN_INPUT_ERROR_BAD_SRC;
-		  peer = NULL; /* Force PEER_NOT_FOUND error path */
-		  goto trace;
-		}
+	      error = OVPN_INPUT_ERROR_BAD_SRC;
+	      peer = NULL; /* Force PEER_NOT_FOUND error path */
+	      goto trace;
 	    }
 
 	  /*
@@ -794,13 +796,10 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 	   */
 	  if (PREDICT_FALSE (!peer && inst->options.static_key_mode))
 	    {
-	      if (remote_addrs[buf_idx].version != 0)
-		{
-		  peer = ovpn_static_key_create_peer (
-		    vm, inst, &remote_addrs[buf_idx], remote_ports[buf_idx]);
-		  if (peer)
-		    peer_id = peer->peer_id;
-		}
+	      peer = ovpn_static_key_create_peer (vm, inst, &remote_addr,
+						  remote_port);
+	      if (peer)
+		peer_id = peer->peer_id;
 	    }
 
 	  if (PREDICT_FALSE (!peer))
@@ -847,8 +846,6 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 	      goto trace;
 	    }
 
-	  u32 buf_idx = b - bufs;
-
 	  /*
 	   * Handle decryption based on cipher mode
 	   */
@@ -881,7 +878,9 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 		}
 
 	      /* Update peer statistics */
-	      u32 pkt_bytes = vlib_buffer_length_in_chain (vm, b0);
+	      u32 pkt_bytes =
+		(b0->flags & VLIB_BUFFER_NEXT_PRESENT) ?
+		vlib_buffer_length_in_chain (vm, b0) : b0->current_length;
 	      ovpn_peer_update_rx (peer, now, pkt_bytes);
 	      rx_bytes[buf_idx] = pkt_bytes;
 
@@ -932,6 +931,7 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 
 	      /* Store context for post-processing after batch crypto */
 	      packet_ids[buf_idx] = packet_id;
+	      instances[buf_idx] = inst;
 	      crypto_contexts[buf_idx] = crypto;
 	      peers[buf_idx] = peer;
 	      decrypt_count++;
@@ -1026,6 +1026,7 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 	  ovpn_peer_t *peer = peers[i];
 	  ovpn_crypto_context_t *crypto = crypto_contexts[i];
 	  u32 packet_id = packet_ids[i];
+	  ovpn_instance_t *pkt_inst = instances[i];
 
 	  /* Update replay window */
 	  ovpn_crypto_update_replay (crypto, packet_id);
@@ -1035,17 +1036,16 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 	   * Only queue update after successful decrypt (authentication).
 	   * Address changes are rare, so use PREDICT_FALSE for optimization.
 	   */
-	  if (instances[i] && instances[i]->options.float_enabled &&
-	      PREDICT_FALSE (ip_address_cmp (&peer->remote_addr, &remote_addrs[i]) != 0 ||
-			     peer->remote_port != remote_ports[i]))
+	  if (pkt_inst && pkt_inst->options.float_enabled &&
+	      PREDICT_FALSE (peer->remote_port != remote_ports[i] ||
+			     ip_address_cmp (&peer->remote_addr, &remote_addrs[i]) != 0))
 	    {
 	      /* Store pending address and signal main thread */
 	      ip_address_copy (&peer->pending_remote_addr, &remote_addrs[i]);
 	      peer->pending_remote_port = remote_ports[i];
 	      vlib_process_signal_event_mt (
 		vm, ovpn_periodic_node.index, OVPN_PROCESS_EVENT_ADDR_UPDATE,
-		OVPN_ADDR_UPDATE_DATA (instances[i]->instance_id,
-				       peer->peer_id));
+		OVPN_ADDR_UPDATE_DATA (pkt_inst->instance_id, peer->peer_id));
 	    }
 
 	  /*
@@ -1063,7 +1063,6 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 				 sizeof (ovpn_data_v2_header_t) + OVPN_TAG_SIZE);
 
 	  /* Handle fragment reassembly if enabled */
-	  ovpn_instance_t *pkt_inst = instances[i];
 	  if (PREDICT_FALSE (pkt_inst && pkt_inst->options.fragment_size > 0))
 	    {
 	      int frag_rv =
@@ -1082,7 +1081,9 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 	    }
 
 	  /* Update peer statistics */
-	  u32 pkt_bytes = vlib_buffer_length_in_chain (vm, b0);
+	  u32 pkt_bytes =
+	    (b0->flags & VLIB_BUFFER_NEXT_PRESENT) ?
+	    vlib_buffer_length_in_chain (vm, b0) : b0->current_length;
 	  ovpn_peer_update_rx (peer, now, pkt_bytes);
 	  rx_bytes[i] = pkt_bytes;
 
