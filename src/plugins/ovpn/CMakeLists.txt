@@ -36,9 +36,6 @@ add_vpp_plugin(ovpn
   ovpn_handshake.c
   ovpn_input.c
   ovpn_output.c
-  ovpn_frag_output.c
-  ovpn_reass.c
-  ovpn_slow_path.c
   ovpn_api.c
   ovpn_mgmt.c
   ovpn_fragment.c
@@ -67,5 +64,4 @@ add_vpp_plugin(ovpn
   MULTIARCH_SOURCES
   ovpn_input.c
   ovpn_output.c
-  ovpn_frag_output.c
 )
