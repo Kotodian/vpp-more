@@ -478,16 +478,24 @@ ovpn_crypto_encrypt_prepare (vlib_main_t *vm, ovpn_per_thread_crypto_t *ptd,
 
   /* Linearize buffer chain if needed */
   lb = b;
-  n_bufs = vlib_buffer_chain_linearize (vm, b);
-  if (n_bufs == 0)
-    return -2; /* No buffers available */
+  if (PREDICT_FALSE (b->flags & VLIB_BUFFER_NEXT_PRESENT))
+    {
+      n_bufs = vlib_buffer_chain_linearize (vm, b);
+      if (n_bufs == 0)
+	return -2; /* No buffers available */
 
-  /* Find last buffer in chain */
-  if (n_bufs > 1)
-    lb = ovpn_find_last_buffer (vm, b);
+      /* Find last buffer in chain */
+      if (n_bufs > 1)
+	lb = ovpn_find_last_buffer (vm, b);
 
-  /* Calculate payload length from chain before modifying */
-  payload_len = vlib_buffer_length_in_chain (vm, b);
+      /* Calculate payload length from chain before modifying */
+      payload_len = vlib_buffer_length_in_chain (vm, b);
+    }
+  else
+    {
+      n_bufs = 1;
+      payload_len = b->current_length;
+    }
 
   /* Get next packet ID */
   packet_id = ovpn_crypto_get_next_packet_id (ctx);
@@ -620,42 +628,50 @@ ovpn_crypto_decrypt_prepare (vlib_main_t *vm, ovpn_per_thread_crypto_t *ptd,
 
   /* Linearize buffer chain if needed */
   lb = b;
-  n_bufs = vlib_buffer_chain_linearize (vm, b);
-  if (n_bufs == 0)
-    return -2; /* No buffers available */
-
-  /* Find last buffer in chain */
-  if (n_bufs > 1)
+  if (PREDICT_FALSE (b->flags & VLIB_BUFFER_NEXT_PRESENT))
     {
-      vlib_buffer_t *before_last = b;
-      lb = b;
+      n_bufs = vlib_buffer_chain_linearize (vm, b);
+      if (n_bufs == 0)
+	return -2; /* No buffers available */
 
-      while (lb->flags & VLIB_BUFFER_NEXT_PRESENT)
+      /* Find last buffer in chain */
+      if (n_bufs > 1)
 	{
-	  before_last = lb;
-	  lb = vlib_get_buffer (vm, lb->next_buffer);
+	  vlib_buffer_t *before_last = b;
+	  lb = b;
+
+	  while (lb->flags & VLIB_BUFFER_NEXT_PRESENT)
+	    {
+	      before_last = lb;
+	      lb = vlib_get_buffer (vm, lb->next_buffer);
+	    }
+
+	  /*
+	   * Ensure auth tag is contiguous in the last buffer
+	   * (not split across the last two buffers)
+	   */
+	  if (PREDICT_FALSE (lb->current_length < OVPN_TAG_SIZE))
+	    {
+	      u32 len_diff = OVPN_TAG_SIZE - lb->current_length;
+
+	      before_last->current_length -= len_diff;
+	      if (before_last == b)
+		before_last->flags &= ~VLIB_BUFFER_TOTAL_LENGTH_VALID;
+
+	      vlib_buffer_advance (lb, (signed) -len_diff);
+	      clib_memcpy_fast (vlib_buffer_get_current (lb),
+				vlib_buffer_get_tail (before_last), len_diff);
+	    }
 	}
 
-      /*
-       * Ensure auth tag is contiguous in the last buffer
-       * (not split across the last two buffers)
-       */
-      if (PREDICT_FALSE (lb->current_length < OVPN_TAG_SIZE))
-	{
-	  u32 len_diff = OVPN_TAG_SIZE - lb->current_length;
-
-	  before_last->current_length -= len_diff;
-	  if (before_last == b)
-	    before_last->flags &= ~VLIB_BUFFER_TOTAL_LENGTH_VALID;
-
-	  vlib_buffer_advance (lb, (signed) -len_diff);
-	  clib_memcpy_fast (vlib_buffer_get_current (lb),
-			    vlib_buffer_get_tail (before_last), len_diff);
-	}
+      /* Get total length from chain */
+      total_len = vlib_buffer_length_in_chain (vm, b);
     }
-
-  /* Get total length from chain */
-  total_len = vlib_buffer_length_in_chain (vm, b);
+  else
+    {
+      n_bufs = 1;
+      total_len = b->current_length;
+    }
 
   /*
    * Buffer should point to start of OpenVPN packet (opcode byte)
@@ -724,8 +740,8 @@ ovpn_crypto_decrypt_prepare (vlib_main_t *vm, ovpn_per_thread_crypto_t *ptd,
       vec_add2_aligned (ptd->chained_crypto_ops, op, 1, CLIB_CACHE_LINE_BYTES);
       vnet_crypto_op_init (op, ctx->decrypt_op_id);
 
-      op->flags |= VNET_CRYPTO_OP_FLAG_CHAINED_BUFFERS;
-      op->flags |= VNET_CRYPTO_OP_FLAG_HMAC_CHECK;
+      op->flags |= (VNET_CRYPTO_OP_FLAG_CHAINED_BUFFERS |
+		    VNET_CRYPTO_OP_FLAG_HMAC_CHECK);
       op->chunk_index = vec_len (ptd->chunks);
 
       /* Decrypt the ciphertext (after header + tag) */
@@ -982,7 +998,7 @@ ovpn_crypto_cbc_decrypt (vlib_main_t *vm, ovpn_crypto_context_t *ctx,
   ciphertext_len = len - 1 - OVPN_CBC_HMAC_SIZE - OVPN_IV_SIZE;
 
   /* Ciphertext must be at least packet_id + some data, and multiple of 16 */
-  if (ciphertext_len < 16 || (ciphertext_len % 16) != 0)
+  if (ciphertext_len < 16 || (ciphertext_len & 0xF) != 0)
     return -3;
 
   /*
@@ -1094,7 +1110,7 @@ ovpn_crypto_cbc_decrypt_no_opcode (vlib_main_t *vm, ovpn_crypto_context_t *ctx,
   ciphertext_len = len - OVPN_CBC_HMAC_SIZE - OVPN_IV_SIZE;
 
   /* Ciphertext must be at least 16 bytes (one AES block) and multiple of 16 */
-  if (ciphertext_len < 16 || (ciphertext_len % 16) != 0)
+  if (ciphertext_len < 16 || (ciphertext_len & 0xF) != 0)
     return -3;
 
   /*
