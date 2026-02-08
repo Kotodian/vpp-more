@@ -223,7 +223,7 @@ void ovpn_crypto_update_replay (ovpn_crypto_context_t *ctx, u32 packet_id);
 always_inline u32
 ovpn_crypto_get_next_packet_id (ovpn_crypto_context_t *ctx)
 {
-  return ctx->packet_id_send++;
+  return __atomic_fetch_add (&ctx->packet_id_send, 1, __ATOMIC_RELAXED);
 }
 
 /*

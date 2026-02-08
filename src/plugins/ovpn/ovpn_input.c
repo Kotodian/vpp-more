@@ -403,6 +403,9 @@ ovpn_static_key_create_peer (vlib_main_t *vm, ovpn_instance_t *inst,
   key->created_at = now;
   key->expires_at = 0;
 
+  /* Update key_id-to-slot cache */
+  peer->key_id_to_slot[0] = OVPN_KEY_SLOT_PRIMARY;
+
   int rv = ovpn_setup_static_key_crypto (
     &key->crypto, inst->cipher_alg, inst->options.static_key,
     inst->options.static_key_direction, inst->options.replay_window);
@@ -836,10 +839,22 @@ ovpn_input_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 	    }
 
 	  /*
-	   * Get crypto context for this key_id using bihash (lock-free).
+	   * Get crypto context for this key_id.
+	   * Fast path: use cached key_id-to-slot mapping (single array index).
+	   * Fallback: bihash lookup (rare, only if cache is stale).
 	   */
-	  crypto = ovpn_peer_get_crypto_by_key_id (
-	    &inst->multi_context.peer_db, peer_id, key_id);
+	  if (PREDICT_TRUE (key_id < 8 &&
+			    peer->key_id_to_slot[key_id] != 0xFF))
+	    {
+	      u8 slot = peer->key_id_to_slot[key_id];
+	      if (PREDICT_TRUE (slot < OVPN_KEY_SLOT_COUNT))
+		crypto = &peer->keys[slot].crypto;
+	    }
+	  if (PREDICT_FALSE (!crypto || !crypto->is_valid))
+	    {
+	      crypto = ovpn_peer_get_crypto_by_key_id (
+		&inst->multi_context.peer_db, peer_id, key_id);
+	    }
 	  if (PREDICT_FALSE (!crypto || !crypto->is_valid))
 	    {
 	      error = OVPN_INPUT_ERROR_NO_CRYPTO;

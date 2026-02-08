@@ -36,8 +36,6 @@
 /* Extern output node registrations */
 extern vlib_node_registration_t ovpn4_output_node;
 extern vlib_node_registration_t ovpn6_output_node;
-extern vlib_node_registration_t ovpn4_output_handoff_node;
-extern vlib_node_registration_t ovpn6_output_handoff_node;
 
 ovpn_if_main_t ovpn_if_main;
 
@@ -125,57 +123,6 @@ ovpn_if_admin_up_down (vnet_main_t *vnm, u32 hw_if_index, u32 flags)
 }
 
 /*
- * Adjacency midchain fixup callback for OpenVPN.
- * Called by adj-midchain-tx AFTER the rewrite (outer IP+UDP header) is
- * applied. Updates the IP length, IP checksum, and UDP length fields to match
- * the actual encrypted payload size.
- */
-static void
-ovpn_adj_midchain_fixup (vlib_main_t *vm, const struct ip_adjacency_t_ *adj,
-			 vlib_buffer_t *b, const void *data)
-{
-  /* Buffer now starts at outer IP header (rewrite has been applied) */
-  u8 *ip_start = vlib_buffer_get_current (b);
-  u8 ip_version = (ip_start[0] >> 4) & 0xf;
-  u16 total_len = vlib_buffer_length_in_chain (vm, b);
-
-  if (ip_version == 4)
-    {
-      ip4_header_t *ip4 = (ip4_header_t *) ip_start;
-      udp_header_t *udp = (udp_header_t *) (ip4 + 1);
-
-      /* Update IP total length */
-      u16 old_len = ip4->length;
-      u16 new_len = clib_host_to_net_u16 (total_len);
-      ip4->length = new_len;
-
-      /* Incrementally update IP checksum */
-      ip_csum_t sum = ip4->checksum;
-      sum = ip_csum_update (sum, old_len, new_len, ip4_header_t, length);
-      ip4->checksum = ip_csum_fold (sum);
-
-      /* Update UDP length (checksum = 0 is valid for UDP over IPv4) */
-      udp->length = clib_host_to_net_u16 (total_len - sizeof (ip4_header_t));
-      udp->checksum = 0;
-    }
-  else if (ip_version == 6)
-    {
-      ip6_header_t *ip6 = (ip6_header_t *) ip_start;
-      udp_header_t *udp = (udp_header_t *) (ip6 + 1);
-      int bogus = 0;
-
-      /* Update IPv6 payload length */
-      ip6->payload_length =
-	clib_host_to_net_u16 (total_len - sizeof (ip6_header_t));
-      udp->length = ip6->payload_length;
-
-      /* IPv6 UDP checksum is mandatory */
-      udp->checksum = 0;
-      udp->checksum = ip6_tcp_udp_icmp_compute_checksum (vm, b, ip6, &bogus);
-    }
-}
-
-/*
  * Update adjacency callback for OpenVPN interface
  * Converts neighbor adjacencies into midchain adjacencies that
  * will be processed by the OpenVPN output nodes
@@ -254,19 +201,19 @@ ovpn_if_update_adj (vnet_main_t *vnm, u32 sw_if_index, adj_index_t ai)
 	   * fixup function is only installed on the first call that converts
 	   * the adjacency to a midchain type.
 	   */
-	  adj_nbr_midchain_update_rewrite (ai, ovpn_adj_midchain_fixup, NULL,
+	  adj_nbr_midchain_update_rewrite (ai, NULL, NULL,
 					   ADJ_FLAG_MIDCHAIN_IP_STACK,
 					   vec_dup (peer->rewrite));
 
 	  /*
-	   * Direct the adjacency to the OpenVPN output handoff node.
-	   * This ensures all output for a peer goes through the same thread,
-	   * which is required for thread-safe access to fragment seq_id and
-	   * other per-peer state without using atomics or locks.
+	   * Direct the adjacency to the OpenVPN output node.
+	   * The output node checks if it's on the peer's thread and
+	   * hands off only when necessary, avoiding handoff overhead
+	   * for the common case where traffic is already on the right thread.
 	   */
 	  u32 output_node_index = (adj->ia_nh_proto == FIB_PROTOCOL_IP4) ?
-				    ovpn4_output_handoff_node.index :
-				    ovpn6_output_handoff_node.index;
+				    ovpn4_output_node.index :
+				    ovpn6_output_node.index;
 	  adj_nbr_midchain_update_next_node (ai, output_node_index);
 
 	  /* Stack the adjacency on the path to reach the peer's endpoint */

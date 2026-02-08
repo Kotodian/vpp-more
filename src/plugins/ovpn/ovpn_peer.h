@@ -246,6 +246,13 @@ typedef struct ovpn_peer_t_
   u8 is_ipv6;		/* Remote endpoint IP version */
   u16 remote_port;	/* Remote UDP port */
 
+  /*
+   * Fast key_id to key slot mapping (OpenVPN key IDs are 0-7, 3-bit).
+   * Updated during rekey. Avoids bihash lookup on every data packet.
+   * Value 0xFF means no mapping (fall back to bihash).
+   */
+  u8 key_id_to_slot[8];
+
   /* Peer state - use atomic access */
   volatile ovpn_peer_state_t state;
 
