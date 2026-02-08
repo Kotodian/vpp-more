@@ -120,12 +120,13 @@ ovpn_handoff (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame,
 	}
       else /* OVPN_HANDOFF_OUT_TUN */
 	{
-	  /* Output packets - lookup peer by adjacency or buffer metadata */
-	  peer_id = vnet_buffer (b[0])->ip.adj_index[VLIB_TX];
+	  /* Output packets - translate adj_index to peer_id first */
+	  u32 adj_index = vnet_buffer (b[0])->ip.adj_index[VLIB_TX];
+	  peer_id = ovpn_peer_get_by_adj_index (adj_index);
 	  u32 sw_if_index = vnet_buffer (b[0])->sw_if_index[VLIB_TX];
 	  inst = ovpn_instance_get_by_sw_if_index (sw_if_index);
 	  ovpn_peer_t *peer = NULL;
-	  if (inst)
+	  if (inst && peer_id != ~0)
 	    peer = ovpn_peer_get (&inst->multi_context.peer_db, peer_id);
 	  if (peer)
 	    {
