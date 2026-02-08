@@ -168,6 +168,9 @@ ovpn_peer_create (ovpn_peer_db_t *db, const ip_address_t *remote_addr,
   peer->sw_if_index = db->sw_if_index;
   peer->generation = 0;
 
+  /* Initialize key_id-to-slot cache (0xFF = unmapped) */
+  clib_memset (peer->key_id_to_slot, 0xFF, sizeof (peer->key_id_to_slot));
+
   /* Set remote address */
   ip_address_copy (&peer->remote_addr, remote_addr);
   peer->remote_port = remote_port;
@@ -635,6 +638,10 @@ ovpn_peer_set_key (vlib_main_t *vm, ovpn_peer_db_t *db, ovpn_peer_t *peer,
   pkey->is_active = 1;
   pkey->created_at = vlib_time_now (vm);
   pkey->expires_at = 0; /* Set by caller based on config */
+
+  /* Update fast key_id-to-slot cache */
+  if (key_id < 8)
+    peer->key_id_to_slot[key_id] = key_slot;
 
   /* Add new entry to bihash for lock-free lookup */
   kv.key = ovpn_peer_key_hash_key (peer->peer_id, key_id);

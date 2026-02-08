@@ -220,6 +220,18 @@ ovpn_output_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 	}
 
       /*
+       * Check if we need to handoff to the peer's assigned thread.
+       * Skip handoff overhead when already on the correct thread (common case).
+       */
+      if (PREDICT_FALSE (peer->input_thread_index != ~0 &&
+			 thread_index != peer->input_thread_index))
+	{
+	  next0 = OVPN_OUTPUT_NEXT_HANDOFF;
+	  peer_id = peer->peer_id;
+	  goto trace;
+	}
+
+      /*
        * Get current crypto context (lock-free).
        * During rekey, peer has two valid keys - output always uses current.
        * The current_key_slot is updated atomically after new key is installed.

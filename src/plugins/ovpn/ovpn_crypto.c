@@ -42,7 +42,8 @@ ovpn_crypto_init (vlib_main_t *vm)
       vec_validate_aligned (ptd->crypto_ops, 0, CLIB_CACHE_LINE_BYTES);
       vec_validate_aligned (ptd->chained_crypto_ops, 0, CLIB_CACHE_LINE_BYTES);
       vec_validate_aligned (ptd->chunks, 0, CLIB_CACHE_LINE_BYTES);
-      vec_validate_aligned (ptd->ivs, 0, CLIB_CACHE_LINE_BYTES);
+      vec_validate_aligned (ptd->ivs, VLIB_FRAME_SIZE * OVPN_NONCE_SIZE - 1,
+			    CLIB_CACHE_LINE_BYTES);
       vec_reset_length (ptd->crypto_ops);
       vec_reset_length (ptd->chained_crypto_ops);
       vec_reset_length (ptd->chunks);
@@ -464,7 +465,6 @@ ovpn_crypto_encrypt_prepare (vlib_main_t *vm, ovpn_per_thread_crypto_t *ptd,
 {
   vlib_buffer_t *lb;
   vnet_crypto_op_t *op;
-  u32 n_bufs;
   u32 packet_id;
   u8 *payload;
   u32 payload_len;
@@ -476,24 +476,18 @@ ovpn_crypto_encrypt_prepare (vlib_main_t *vm, ovpn_per_thread_crypto_t *ptd,
   if (!ctx->is_valid)
     return -1;
 
-  /* Linearize buffer chain if needed */
+  /* Handle buffer chains - use chunked crypto directly (skip linearization) */
   lb = b;
   if (PREDICT_FALSE (b->flags & VLIB_BUFFER_NEXT_PRESENT))
     {
-      n_bufs = vlib_buffer_chain_linearize (vm, b);
-      if (n_bufs == 0)
-	return -2; /* No buffers available */
-
       /* Find last buffer in chain */
-      if (n_bufs > 1)
-	lb = ovpn_find_last_buffer (vm, b);
+      lb = ovpn_find_last_buffer (vm, b);
 
-      /* Calculate payload length from chain before modifying */
+      /* Calculate payload length from chain */
       payload_len = vlib_buffer_length_in_chain (vm, b);
     }
   else
     {
-      n_bufs = 1;
       payload_len = b->current_length;
     }
 
@@ -612,7 +606,6 @@ ovpn_crypto_decrypt_prepare (vlib_main_t *vm, ovpn_per_thread_crypto_t *ptd,
 {
   vlib_buffer_t *lb;
   vnet_crypto_op_t *op;
-  u32 n_bufs;
   u32 packet_id;
   u8 *aad;
   u32 aad_len;
@@ -626,42 +619,35 @@ ovpn_crypto_decrypt_prepare (vlib_main_t *vm, ovpn_per_thread_crypto_t *ptd,
   if (!ctx->is_valid)
     return -1;
 
-  /* Linearize buffer chain if needed */
+  /* Handle chained buffers without linearization */
   lb = b;
   if (PREDICT_FALSE (b->flags & VLIB_BUFFER_NEXT_PRESENT))
     {
-      n_bufs = vlib_buffer_chain_linearize (vm, b);
-      if (n_bufs == 0)
-	return -2; /* No buffers available */
+      /* Find last buffer and the one before it */
+      vlib_buffer_t *before_last = b;
+      lb = b;
 
-      /* Find last buffer in chain */
-      if (n_bufs > 1)
+      while (lb->flags & VLIB_BUFFER_NEXT_PRESENT)
 	{
-	  vlib_buffer_t *before_last = b;
-	  lb = b;
+	  before_last = lb;
+	  lb = vlib_get_buffer (vm, lb->next_buffer);
+	}
 
-	  while (lb->flags & VLIB_BUFFER_NEXT_PRESENT)
-	    {
-	      before_last = lb;
-	      lb = vlib_get_buffer (vm, lb->next_buffer);
-	    }
+      /*
+       * Ensure auth tag is contiguous in the last buffer
+       * (not split across the last two buffers)
+       */
+      if (PREDICT_FALSE (lb->current_length < OVPN_TAG_SIZE))
+	{
+	  u32 len_diff = OVPN_TAG_SIZE - lb->current_length;
 
-	  /*
-	   * Ensure auth tag is contiguous in the last buffer
-	   * (not split across the last two buffers)
-	   */
-	  if (PREDICT_FALSE (lb->current_length < OVPN_TAG_SIZE))
-	    {
-	      u32 len_diff = OVPN_TAG_SIZE - lb->current_length;
+	  before_last->current_length -= len_diff;
+	  if (before_last == b)
+	    before_last->flags &= ~VLIB_BUFFER_TOTAL_LENGTH_VALID;
 
-	      before_last->current_length -= len_diff;
-	      if (before_last == b)
-		before_last->flags &= ~VLIB_BUFFER_TOTAL_LENGTH_VALID;
-
-	      vlib_buffer_advance (lb, (signed) -len_diff);
-	      clib_memcpy_fast (vlib_buffer_get_current (lb),
-				vlib_buffer_get_tail (before_last), len_diff);
-	    }
+	  vlib_buffer_advance (lb, (signed) -len_diff);
+	  clib_memcpy_fast (vlib_buffer_get_current (lb),
+			    vlib_buffer_get_tail (before_last), len_diff);
 	}
 
       /* Get total length from chain */
@@ -669,7 +655,6 @@ ovpn_crypto_decrypt_prepare (vlib_main_t *vm, ovpn_per_thread_crypto_t *ptd,
     }
   else
     {
-      n_bufs = 1;
       total_len = b->current_length;
     }
 
