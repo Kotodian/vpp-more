@@ -1009,6 +1009,13 @@ ikev2_crypto_init (ikev2_main_t * km)
 
   vec_add2 (km->supported_transforms, tr, 1);
   tr->type = IKEV2_TRANSFORM_TYPE_DH;
+  tr->dh_type = IKEV2_TRANSFORM_DH_TYPE_CURVE_SM2;
+  tr->key_len = (256 * 2) / 8;
+  tr->nid = NID_sm2;
+  tr->dh_group = IKEV2_DH_GROUP_ECP;
+
+  vec_add2 (km->supported_transforms, tr, 1);
+  tr->type = IKEV2_TRANSFORM_TYPE_DH;
   tr->dh_type = IKEV2_TRANSFORM_DH_TYPE_ECP_521;
   tr->key_len = (528 * 2) / 8;
   tr->nid = NID_secp521r1;

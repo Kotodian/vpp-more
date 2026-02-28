@@ -289,7 +289,8 @@ typedef enum
   _(27, BRAINPOOL_224, "brainpool-224") \
   _(28, BRAINPOOL_256, "brainpool-256") \
   _(29, BRAINPOOL_384, "brainpool-384") \
-  _(30, BRAINPOOL_512, "brainpool-512")
+  _(30, BRAINPOOL_512, "brainpool-512") \
+  _(41, CURVE_SM2,     "curve-sm2")
 #else
 #define foreach_ikev2_transform_dh_type \
   _(0, NONE,           "none")          \
@@ -307,7 +308,8 @@ typedef enum
   _(22, MODP_1024_160, "modp-1024-160") \
   _(23, MODP_2048_224, "modp-2048-224") \
   _(24, MODP_2048_256, "modp-2048-256") \
-  _(25, ECP_192,       "ecp-192")
+  _(25, ECP_192,       "ecp-192")       \
+  _(41, CURVE_SM2,     "curve-sm2")
 #endif
 
 typedef enum
