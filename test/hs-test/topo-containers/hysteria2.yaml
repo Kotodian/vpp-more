@@ -1,0 +1,24 @@
+---
+volumes:
+  - volume: &shared-vol
+      host-dir: "$HST_VOLUME_DIR/shared"
+
+containers:
+  - name: "vpp"
+    volumes:
+      - <<: *shared-vol
+        container-dir: "/tmp/vpp"
+        is-default-work-dir: true
+
+  - name: "hy2-client"
+    image: "hs-test/hy2-client"
+    is-optional: true
+    volumes:
+      - <<: *shared-vol
+        container-dir: "/tmp/hy2"
+        is-default-work-dir: true
+
+  - name: "curl"
+    image: "hs-test/curl"
+    is-optional: true
+    run-detached: false

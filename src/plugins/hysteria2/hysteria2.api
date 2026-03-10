@@ -1,0 +1,14 @@
+option version = "0.1.0";
+
+autoreply define hysteria2_server_add_del
+{
+  u32 client_index;
+  u32 context;
+  bool is_add;
+  u32 ckpair_index;
+  u32 table_id;
+  u32 idle_timeout;
+  u8 uri[256];
+  u8 auth_secret[128];
+  u8 salamander_password[128];
+};

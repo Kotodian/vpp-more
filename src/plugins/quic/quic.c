@@ -23,8 +23,8 @@ static vlib_error_desc_t quic_error_counters[] = {
 #undef quic_error
 };
 
-quic_main_t quic_main;
-quic_engine_vft_t *quic_engine_vfts;
+__clib_export quic_main_t quic_main;
+__clib_export quic_engine_vft_t *quic_engine_vfts;
 
 static_always_inline quic_engine_type_t
 quic_get_engine_type (quic_engine_type_t requested,
@@ -63,6 +63,18 @@ quic_ctx_set_alpn_protos (quic_ctx_t *ctx, transport_endpt_crypto_cfg_t *ccfg)
   ctx->alpn_protos[1] = ccfg->alpn_protos[1];
   ctx->alpn_protos[2] = ccfg->alpn_protos[2];
   ctx->alpn_protos[3] = ccfg->alpn_protos[3];
+}
+
+static_always_inline void
+quic_ctx_set_packet_transform (quic_ctx_t *ctx, transport_endpt_cfg_quic_t *qcfg)
+{
+  ctx->packet_transform = qcfg->packet_transform;
+  ctx->enable_datagrams = qcfg->enable_datagrams;
+  ctx->packet_transform_password_len =
+    clib_min (qcfg->password_len, TRANSPORT_ENDPT_QUIC_PASSWORD_MAX);
+  if (ctx->packet_transform_password_len)
+    clib_memcpy (ctx->packet_transform_password, qcfg->password,
+		 ctx->packet_transform_password_len);
 }
 
 static int
@@ -123,6 +135,9 @@ quic_connect_connection (transport_endpoint_cfg_t *tep)
   ctx->crypto_engine = ccfg->crypto_engine;
   ctx->verify_cfg = ccfg->verify_cfg;
   ctx->ckpair_index = ccfg->ckpair_index;
+  ext_cfg = session_endpoint_get_ext_cfg (sep, TRANSPORT_ENDPT_EXT_CFG_QUIC);
+  if (ext_cfg)
+    quic_ctx_set_packet_transform (ctx, &ext_cfg->quic);
   error = quic_eng_crypto_context_acquire_connect (ctx);
   if (error)
     return error;
@@ -299,6 +314,9 @@ quic_start_listen (u32 quic_listen_session_index,
   lctx->crypto_engine = ccfg->crypto_engine;
   lctx->verify_cfg = ccfg->verify_cfg;
   lctx->ckpair_index = ccfg->ckpair_index;
+  ext_cfg = session_endpoint_get_ext_cfg (sep, TRANSPORT_ENDPT_EXT_CFG_QUIC);
+  if (ext_cfg)
+    quic_ctx_set_packet_transform (lctx, &ext_cfg->quic);
   if ((rv = quic_eng_crypto_context_acquire_listen (lctx)))
     {
       vnet_unlisten_args_t a = {
@@ -529,6 +547,13 @@ quic_udp_session_accepted_callback (session_t * udp_session)
 
   ctx->crypto_engine = lctx->crypto_engine;
   ctx->ckpair_index = lctx->ckpair_index;
+  ctx->packet_transform = lctx->packet_transform;
+  ctx->enable_datagrams = lctx->enable_datagrams;
+  ctx->packet_transform_password_len = lctx->packet_transform_password_len;
+  if (lctx->packet_transform_password_len)
+    clib_memcpy (ctx->packet_transform_password,
+		 lctx->packet_transform_password,
+		 lctx->packet_transform_password_len);
   quic_eng_crypto_context_acquire_accept (ctx);
   udp_session->opaque = ctx_index;
   udp_session->session_state = SESSION_STATE_READY;
@@ -561,6 +586,126 @@ quic_custom_app_rx_callback (transport_connection_t * tc)
   quic_eng_ack_rx_data (stream_session);
 
   return 0;
+}
+
+static_always_inline quic_ctx_t *
+quic_session_get_ctx_if_valid (session_handle_t quic_session_handle)
+{
+  session_t *quic_session;
+  quic_ctx_t *ctx;
+
+  quic_session = session_get_from_handle_if_valid (quic_session_handle);
+  if (!quic_session ||
+      session_type_transport_proto (quic_session->session_type) !=
+	TRANSPORT_PROTO_QUIC)
+    return 0;
+
+  ctx =
+    quic_ctx_get (quic_session->connection_index, quic_session->thread_index);
+  if (!ctx || quic_ctx_is_stream (ctx))
+    return 0;
+  return ctx;
+}
+
+typedef struct
+{
+  session_handle_t quic_session_handle;
+  u32 data_len;
+  u8 data[];
+} quic_datagram_send_rpc_args_t;
+
+static void
+quic_datagram_send_rpc (void *rpc_args)
+{
+  quic_datagram_send_rpc_args_t *args = rpc_args;
+  quic_ctx_t *ctx = quic_session_get_ctx_if_valid (args->quic_session_handle);
+
+  if (ctx)
+    quic_eng_send_datagram (ctx, args->data, args->data_len);
+  clib_mem_free (args);
+}
+
+__clib_export int
+quic_custom_datagram_bind (session_handle_t quic_session_handle,
+			   quic_datagram_rx_fn_t *rx_fn,
+			   quic_datagram_closed_fn_t *closed_fn,
+			   void *opaque)
+{
+  quic_ctx_t *ctx = quic_session_get_ctx_if_valid (quic_session_handle);
+
+  if (!ctx || !ctx->enable_datagrams)
+    return SESSION_E_INVALID;
+
+  ctx->datagram_rx_fn = rx_fn;
+  ctx->datagram_closed_fn = closed_fn;
+  ctx->datagram_opaque = opaque;
+  return 0;
+}
+
+__clib_export void
+quic_custom_datagram_unbind (session_handle_t quic_session_handle)
+{
+  quic_ctx_t *ctx = quic_session_get_ctx_if_valid (quic_session_handle);
+
+  if (!ctx)
+    return;
+
+  ctx->datagram_rx_fn = 0;
+  ctx->datagram_closed_fn = 0;
+  ctx->datagram_opaque = 0;
+}
+
+__clib_export int
+quic_custom_datagram_send (session_handle_t quic_session_handle,
+			   const u8 *data, u32 data_len)
+{
+  clib_thread_index_t thread_index;
+  quic_datagram_send_rpc_args_t *args;
+  quic_ctx_t *ctx;
+
+  ctx = quic_session_get_ctx_if_valid (quic_session_handle);
+  if (!ctx || !ctx->enable_datagrams)
+    return SESSION_E_INVALID;
+
+  thread_index = session_thread_from_handle (quic_session_handle);
+  if (thread_index == vlib_get_thread_index ())
+    return quic_eng_send_datagram (ctx, data, data_len);
+
+  args = clib_mem_alloc (sizeof (*args) + data_len);
+  args->quic_session_handle = quic_session_handle;
+  args->data_len = data_len;
+  clib_memcpy (args->data, data, data_len);
+  session_send_rpc_evt_to_thread (thread_index, quic_datagram_send_rpc, args);
+  return 0;
+}
+
+__clib_export int
+quic_custom_stream_bind (session_handle_t quic_session_handle,
+			 quic_stream_accept_fn_t *accept_fn, void *opaque,
+			 u32 app_wrk_index)
+{
+  quic_ctx_t *ctx = quic_session_get_ctx_if_valid (quic_session_handle);
+
+  if (!ctx)
+    return SESSION_E_INVALID;
+
+  ctx->stream_accept_fn = accept_fn;
+  ctx->stream_accept_opaque = opaque;
+  ctx->stream_custom_app_wrk_id = app_wrk_index;
+  return 0;
+}
+
+__clib_export void
+quic_custom_stream_unbind (session_handle_t quic_session_handle)
+{
+  quic_ctx_t *ctx = quic_session_get_ctx_if_valid (quic_session_handle);
+
+  if (!ctx)
+    return;
+
+  ctx->stream_accept_fn = 0;
+  ctx->stream_accept_opaque = 0;
+  ctx->stream_custom_app_wrk_id = 0;
 }
 
 static int
@@ -671,7 +816,20 @@ quic_session_attribute (u32 ctx_index, clib_thread_index_t thread_index,
       attr->tls_alpn = ctx->alpn_selected;
       break;
     case TRANSPORT_ENDPT_ATTR_NEXT_TRANSPORT:
-      attr->next_transport = ctx->udp_session_handle;
+      if (quic_ctx_is_stream (ctx))
+	{
+	  quic_ctx_t *qctx;
+	  session_t *qsession;
+
+	  qctx =
+	    quic_ctx_get (ctx->quic_connection_ctx_id, ctx->c_thread_index);
+	  if (qctx->c_s_index == QUIC_SESSION_INVALID)
+	    return -1;
+	  qsession = session_get (qctx->c_s_index, qctx->c_thread_index);
+	  attr->next_transport = session_handle (qsession);
+	}
+      else
+	attr->next_transport = ctx->udp_session_handle;
       break;
     case TRANSPORT_ENDPT_ATTR_APP_PROTO_ERR_CODE:
       attr->app_proto_err_code = (u64) ctx->app_err_code;

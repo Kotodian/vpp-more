@@ -1,0 +1,7 @@
+ARG UBUNTU_VERSION=22.04
+FROM localhost:5001/vpp-test-base:latest
+
+COPY resources/hysteria2/hysteria-linux-amd64 /usr/bin/hysteria
+RUN chmod +x /usr/bin/hysteria
+
+ENTRYPOINT ["tail", "-f", "/dev/null"]

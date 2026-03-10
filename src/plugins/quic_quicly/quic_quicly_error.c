@@ -7,10 +7,16 @@
 #include <quicly.h>
 #include <quicly/constants.h>
 
+/* Compat shim: quicly 0.1.5 replaced quicly_error_t with int and may
+ * not define QUICLY_TRANSPORT_ERROR_CRYPTO as a macro */
+#ifndef QUICLY_TRANSPORT_ERROR_CRYPTO
+#define QUICLY_TRANSPORT_ERROR_CRYPTO(e) (QUICLY_TRANSPORT_ERROR_TLS_ALERT_BASE + (e))
+#endif
+
 u8 *
 quic_quicly_format_err (u8 *s, va_list *args)
 {
-  quicly_error_t code = va_arg (*args, quicly_error_t);
+  int code = va_arg (*args, int);
   switch (code)
     {
     case 0:

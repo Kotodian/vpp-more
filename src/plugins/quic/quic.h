@@ -27,6 +27,7 @@
 #define QUIC_TIMER_HANDLE_INVALID ((u32) ~0)
 #define QUIC_SESSION_INVALID ((u32) ~0 - 1)
 #define QUIC_MAX_PACKET_SIZE 1280
+#define QUIC_PACKET_TRANSFORM_MAX_EXTRA 8
 
 #define QUIC_INT_MAX  0x3FFFFFFFFFFFFFFF
 #define QUIC_DEFAULT_FIFO_SIZE (64 << 10)
@@ -147,6 +148,13 @@ typedef enum quic_cc_type
   QUIC_CC_CUBIC,
 } quic_cc_type_t;
 
+typedef void (quic_datagram_rx_fn_t) (session_handle_t quic_session_handle,
+				      const u8 *data, u32 data_len,
+				      void *opaque);
+typedef void (quic_datagram_closed_fn_t) (session_handle_t quic_session_handle,
+					  void *opaque);
+typedef int (quic_stream_accept_fn_t) (session_t *stream_session, void *opaque);
+
 /* This structure is used to implement the concept of VPP connection for QUIC.
  * We create one per connection and one per stream. */
 typedef struct quic_ctx_
@@ -196,6 +204,16 @@ typedef struct quic_ctx_
   ip46_address_t lcl_ip;
   u16 lcl_port;
   quic_app_err_code_t app_err_code;
+  transport_endpt_quic_packet_transform_t packet_transform;
+  u8 enable_datagrams;
+  u8 packet_transform_password_len;
+  u8 packet_transform_password[TRANSPORT_ENDPT_QUIC_PASSWORD_MAX];
+  quic_datagram_rx_fn_t *datagram_rx_fn;
+  quic_datagram_closed_fn_t *datagram_closed_fn;
+  void *datagram_opaque;
+  quic_stream_accept_fn_t *stream_accept_fn;
+  void *stream_accept_opaque;
+  u32 stream_custom_app_wrk_id;
 } quic_ctx_t;
 
 /* Make sure our custom fields don't overlap with the fields we use in
@@ -413,6 +431,7 @@ typedef struct quic_engine_vft_
   void (*ack_rx_data) (session_t *stream_session);
   u64 (*stream_tx) (quic_ctx_t *ctx, session_t *stream_session);
   int (*send_packets) (quic_ctx_t *ctx);
+  int (*send_datagram) (quic_ctx_t *ctx, const u8 *data, u32 data_len);
   u8 *(*format_connection_stats) (u8 *s, va_list *args);
   u8 *(*format_stream_stats) (u8 *s, va_list *args);
   quic_stream_id_t (*stream_get_stream_id) (quic_ctx_t *ctx);
@@ -429,6 +448,19 @@ extern void quic_register_engine (const quic_engine_vft_t *vft,
 				  quic_engine_type_t engine_type);
 typedef void (*quic_register_engine_fn) (const quic_engine_vft_t *vft,
 					 quic_engine_type_t engine_type);
+
+int quic_custom_datagram_bind (session_handle_t quic_session_handle,
+			       quic_datagram_rx_fn_t *rx_fn,
+			       quic_datagram_closed_fn_t *closed_fn,
+			       void *opaque);
+void quic_custom_datagram_unbind (session_handle_t quic_session_handle);
+int quic_custom_datagram_send (session_handle_t quic_session_handle,
+			       const u8 *data, u32 data_len);
+
+int quic_custom_stream_bind (session_handle_t quic_session_handle,
+			     quic_stream_accept_fn_t *accept_fn, void *opaque,
+			     u32 app_wrk_index);
+void quic_custom_stream_unbind (session_handle_t quic_session_handle);
 
 void quic_update_fifo_size ();
 

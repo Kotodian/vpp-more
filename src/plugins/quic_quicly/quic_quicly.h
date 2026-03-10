@@ -32,8 +32,8 @@ typedef struct quic_quicly_rx_packet_ctx_
 #define _(type, name) type name;
   foreach_quic_rx_pkt_ctx_field
 #undef _
-    quicly_decoded_packet_t packet;
-  u8 data[QUIC_MAX_PACKET_SIZE];
+  quicly_decoded_packet_t packet;
+  u8 data[QUIC_MAX_PACKET_SIZE + QUIC_PACKET_TRANSFORM_MAX_EXTRA];
   union
   {
     struct sockaddr sa;

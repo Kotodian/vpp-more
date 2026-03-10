@@ -132,6 +132,16 @@ quic_eng_send_packets (void *conn)
   return (quic_engine_vfts[qm->engine_type].send_packets (conn));
 }
 
+static_always_inline int
+quic_eng_send_datagram (quic_ctx_t *ctx, const u8 *data, u32 data_len)
+{
+  quic_main_t *qm = &quic_main;
+  if (PREDICT_FALSE (!quic_engine_vfts[qm->engine_type].send_datagram))
+    return -1;
+  return (quic_engine_vfts[qm->engine_type].send_datagram (ctx, data,
+							   data_len));
+}
+
 static_always_inline u8 *
 quic_eng_format_connection_stats (u8 *s, va_list *args)
 {

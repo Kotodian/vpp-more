@@ -254,6 +254,7 @@ typedef enum transport_endpt_ext_cfg_type_
   TRANSPORT_ENDPT_EXT_CFG_NONE,
   TRANSPORT_ENDPT_EXT_CFG_CRYPTO,
   TRANSPORT_ENDPT_EXT_CFG_HTTP,
+  TRANSPORT_ENDPT_EXT_CFG_QUIC,
 } transport_endpt_ext_cfg_type_t;
 
 #define foreach_tls_verify_cfg                                                \
@@ -352,6 +353,22 @@ typedef struct transport_endpt_crypto_cfg_
   u8 hostname[256];	       /**< full domain len is 255 as per rfc 3986 */
 } transport_endpt_crypto_cfg_t;
 
+#define TRANSPORT_ENDPT_QUIC_PASSWORD_MAX 128
+
+typedef enum transport_endpt_quic_packet_transform_
+{
+  TRANSPORT_ENDPT_QUIC_PACKET_TRANSFORM_NONE,
+  TRANSPORT_ENDPT_QUIC_PACKET_TRANSFORM_SALAMANDER,
+} __clib_packed transport_endpt_quic_packet_transform_t;
+
+typedef struct transport_endpt_cfg_quic_
+{
+  transport_endpt_quic_packet_transform_t packet_transform;
+  u8 enable_datagrams;
+  u8 password_len;
+  u8 password[TRANSPORT_ENDPT_QUIC_PASSWORD_MAX];
+} transport_endpt_cfg_quic_t;
+
 typedef struct tls_cert_
 {
   void *cert;
@@ -364,6 +381,7 @@ typedef struct transport_endpt_ext_cfg_
   union
   {
     transport_endpt_crypto_cfg_t crypto;
+    transport_endpt_cfg_quic_t quic;
     u32 opaque; /**< For general use */
     u8 data[0];
   };

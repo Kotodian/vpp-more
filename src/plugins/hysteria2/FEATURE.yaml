@@ -1,0 +1,10 @@
+---
+name: Hysteria2
+maintainer: maintainers TBD
+features:
+  - HTTP/3 auth endpoint for Hysteria2
+  - listener control-plane via CLI and binary API
+  - Salamander packet transform plumbing for QUIC listeners
+description: "Experimental Hysteria2 server scaffolding"
+state: experimental
+properties: [API, CLI, MULTITHREAD]

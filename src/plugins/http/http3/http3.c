@@ -571,7 +571,9 @@ http3_req_state_wait_app_reply (http_conn_t *stream, http3_stream_ctx_t *sctx,
     {
       /* all done, close stream */
       if (!sctx->base.is_tunnel)
-	http3_stream_close (stream, sctx);
+	{
+	  http3_stream_close (stream, sctx);
+	}
     }
 
   http_io_ts_after_write (stream, 0);
@@ -1054,14 +1056,18 @@ http3_req_state_wait_transport_method (http_conn_t *stream,
 	  http3_stream_terminate (stream, sctx, HTTP3_ERROR_MESSAGE_ERROR);
 	  return HTTP_SM_STOP;
 	}
-      if (stream->state == HTTP_CONN_STATE_HALF_CLOSED && !http_io_ts_max_read (stream))
+      if (sctx->base.body_len > 0)
 	{
-	  HTTP_DBG (1, "request incomplete");
-	  http3_stream_terminate (stream, sctx, HTTP3_ERROR_REQUEST_INCOMPLETE);
-	  return HTTP_SM_STOP;
+	  if (stream->state == HTTP_CONN_STATE_HALF_CLOSED &&
+	      !http_io_ts_max_read (stream))
+	    {
+	      http3_stream_terminate (stream, sctx,
+				     HTTP3_ERROR_REQUEST_INCOMPLETE);
+	      return HTTP_SM_STOP;
+	    }
+	  new_state = HTTP_REQ_STATE_TRANSPORT_IO_MORE_DATA;
+	  res = HTTP_SM_CONTINUE;
 	}
-      new_state = HTTP_REQ_STATE_TRANSPORT_IO_MORE_DATA;
-      res = HTTP_SM_CONTINUE;
     }
   sctx->base.to_recv = sctx->base.body_len;
 
@@ -1289,7 +1295,6 @@ http3_req_state_transport_io_more_data (http_conn_t *stream,
       if (stream->flags & HTTP_CONN_F_IS_SERVER && stream->state == HTTP_CONN_STATE_HALF_CLOSED &&
 	  !http_io_ts_max_read (stream))
 	{
-	  HTTP_DBG (1, "request incomplete");
 	  http3_stream_terminate (stream, sctx, HTTP3_ERROR_REQUEST_INCOMPLETE);
 	  return HTTP_SM_STOP;
 	}
@@ -2426,7 +2431,6 @@ http3_transport_stream_close_callback (http_conn_t *stream)
 	    {
 	      if (sctx->base.state < HTTP_REQ_STATE_WAIT_APP_REPLY && !http_io_ts_max_read (stream))
 		{
-		  HTTP_DBG (1, "request incomplete");
 		  http3_stream_terminate (stream, sctx, HTTP3_ERROR_REQUEST_INCOMPLETE);
 		  return;
 		}
@@ -2517,7 +2521,8 @@ http3_conn_cleanup_callback (http_conn_t *hc)
     {
       parent_sctx =
 	http3_stream_ctx_get (h3c->parent_sctx_index, hc->c_thread_index);
-      session_transport_delete_notify (&parent_sctx->base.connection);
+      if (parent_sctx->base.c_s_index != SESSION_INVALID_INDEX)
+	session_transport_delete_notify (&parent_sctx->base.connection);
       http3_stream_ctx_free_w_index (h3c->parent_sctx_index,
 				     hc->c_thread_index);
       h3c->parent_sctx_index = SESSION_INVALID_INDEX;
@@ -2540,7 +2545,8 @@ http3_stream_cleanup_callback (http_conn_t *stream)
   if (stream->flags & HTTP_CONN_F_BIDIRECTIONAL_STREAM)
     {
       sctx = http3_stream_ctx_get (pointer_to_uword (stream->opaque), stream->c_thread_index);
-      if (!(stream->flags & HTTP_CONN_F_NO_APP_SESSION))
+      if (!(stream->flags & HTTP_CONN_F_NO_APP_SESSION) &&
+	  sctx->base.c_s_index != SESSION_INVALID_INDEX)
 	session_transport_delete_notify (&sctx->base.connection);
     }
   http3_stream_ctx_free (stream);

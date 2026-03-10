@@ -190,6 +190,7 @@ typedef enum http_content_type_
   _ (204, NO_CONTENT, "204 No Content")                                       \
   _ (205, RESET_CONTENT, "205 Reset Content")                                 \
   _ (206, PARTIAL_CONTENT, "206 Partial Content")                             \
+  _ (233, HY_OK, "233 HyOK") /* hysteria2: non-IANA status */                  \
   _ (300, MULTIPLE_CHOICES, "300 Multiple Choices")                           \
   _ (301, MOVED, "301 Moved Permanently")                                     \
   _ (302, FOUND, "302 Found")                                                 \

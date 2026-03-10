@@ -114,6 +114,7 @@ build_image "Dockerfile.ginkgo" "hs-test/ginkgo"
 # Build HTTP/3 nginx if available
 echo "=== Building HTTP/3 nginx image ==="
 build_image "Dockerfile.nginx-http3" "hs-test/nginx-http3"
+build_image "Dockerfile.hy2-client" "hs-test/hy2-client"
 
 # Build envoy separately since it doesn't use our base image
 echo "=== Building envoy-test ==="

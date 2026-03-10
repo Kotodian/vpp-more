@@ -12,6 +12,7 @@
 #include <quic_quicly/quic_quicly_crypto.h>
 #include <vnet/session/application.h>
 #include <vnet/session/session.h>
+#include <openssl/rand.h>
 
 quic_quicly_main_t quic_quicly_main;
 
@@ -20,6 +21,212 @@ quic_quicly_main_t quic_quicly_main;
 #define QUIC_QUICLY_SEND_PACKET_VEC_SIZE 10
 
 #define QUIC_QUICLY_RCV_MAX_PACKETS 16
+
+/*
+ * Salamander packet transform: lightweight obfuscation for QUIC packets.
+ * Uses BLAKE2b (hand-rolled to avoid OpenSSL overhead on the fast path)
+ * to derive a repeating XOR mask from a shared password and random salt.
+ * This is intentionally NOT encryption — it only prevents casual DPI.
+ */
+#define QUIC_SALAMANDER_SALT_LEN 8
+#define QUIC_SALAMANDER_HASH_LEN 32
+#define QUIC_BLAKE2B_BLOCK_LEN 128
+
+static const u64 quic_blake2b_iv[8] = {
+  0x6a09e667f3bcc908ULL,
+  0xbb67ae8584caa73bULL,
+  0x3c6ef372fe94f82bULL,
+  0xa54ff53a5f1d36f1ULL,
+  0x510e527fade682d1ULL,
+  0x9b05688c2b3e6c1fULL,
+  0x1f83d9abfb41bd6bULL,
+  0x5be0cd19137e2179ULL,
+};
+
+static const u8 quic_blake2b_sigma[12][16] = {
+  { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 },
+  { 14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3 },
+  { 11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4 },
+  { 7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8 },
+  { 9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13 },
+  { 2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9 },
+  { 12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11 },
+  { 13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10 },
+  { 6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5 },
+  { 10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0 },
+  { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 },
+  { 14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3 },
+};
+
+typedef struct
+{
+  u64 h[8];
+  u64 t[2];
+  u64 f[2];
+  u8 buf[QUIC_BLAKE2B_BLOCK_LEN];
+  u32 buflen;
+} quic_blake2b_state_t;
+
+static_always_inline u64
+quic_blake2b_load64 (const void *src)
+{
+  const u8 *p = src;
+
+  return ((u64) p[0]) | ((u64) p[1] << 8) | ((u64) p[2] << 16) |
+	 ((u64) p[3] << 24) | ((u64) p[4] << 32) | ((u64) p[5] << 40) |
+	 ((u64) p[6] << 48) | ((u64) p[7] << 56);
+}
+
+static_always_inline void
+quic_blake2b_store64 (void *dst, u64 word)
+{
+  u8 *p = dst;
+
+  p[0] = word;
+  p[1] = word >> 8;
+  p[2] = word >> 16;
+  p[3] = word >> 24;
+  p[4] = word >> 32;
+  p[5] = word >> 40;
+  p[6] = word >> 48;
+  p[7] = word >> 56;
+}
+
+static_always_inline u64
+quic_blake2b_rot64 (u64 word, u32 count)
+{
+  return (word >> count) | (word << (64 - count));
+}
+
+static void
+quic_blake2b_increment (quic_blake2b_state_t *st, u32 len)
+{
+  st->t[0] += len;
+  if (st->t[0] < len)
+    st->t[1]++;
+}
+
+static void
+quic_blake2b_compress (quic_blake2b_state_t *st, const u8 block[128],
+		       u8 is_last)
+{
+  u64 m[16], v[16];
+  u32 i, r;
+
+  for (i = 0; i < ARRAY_LEN (m); i++)
+    m[i] = quic_blake2b_load64 (block + i * sizeof (u64));
+
+  for (i = 0; i < 8; i++)
+    {
+      v[i] = st->h[i];
+      v[i + 8] = quic_blake2b_iv[i];
+    }
+  v[12] ^= st->t[0];
+  v[13] ^= st->t[1];
+  if (is_last)
+    v[14] = ~v[14];
+
+#define QUIC_BLAKE2B_G(a, b, c, d, x, y)                                       \
+  do                                                                            \
+    {                                                                           \
+      v[a] = v[a] + v[b] + (x);                                                 \
+      v[d] = quic_blake2b_rot64 (v[d] ^ v[a], 32);                              \
+      v[c] += v[d];                                                             \
+      v[b] = quic_blake2b_rot64 (v[b] ^ v[c], 24);                              \
+      v[a] = v[a] + v[b] + (y);                                                 \
+      v[d] = quic_blake2b_rot64 (v[d] ^ v[a], 16);                              \
+      v[c] += v[d];                                                             \
+      v[b] = quic_blake2b_rot64 (v[b] ^ v[c], 63);                              \
+    }                                                                           \
+  while (0)
+
+#define QUIC_BLAKE2B_ROUND(r)                                                   \
+  do                                                                            \
+    {                                                                           \
+      QUIC_BLAKE2B_G (0, 4, 8, 12, m[quic_blake2b_sigma[r][0]],                 \
+		       m[quic_blake2b_sigma[r][1]]);                            \
+      QUIC_BLAKE2B_G (1, 5, 9, 13, m[quic_blake2b_sigma[r][2]],                 \
+		       m[quic_blake2b_sigma[r][3]]);                            \
+      QUIC_BLAKE2B_G (2, 6, 10, 14, m[quic_blake2b_sigma[r][4]],                \
+		       m[quic_blake2b_sigma[r][5]]);                            \
+      QUIC_BLAKE2B_G (3, 7, 11, 15, m[quic_blake2b_sigma[r][6]],                \
+		       m[quic_blake2b_sigma[r][7]]);                            \
+      QUIC_BLAKE2B_G (0, 5, 10, 15, m[quic_blake2b_sigma[r][8]],                \
+		       m[quic_blake2b_sigma[r][9]]);                            \
+      QUIC_BLAKE2B_G (1, 6, 11, 12, m[quic_blake2b_sigma[r][10]],               \
+		       m[quic_blake2b_sigma[r][11]]);                           \
+      QUIC_BLAKE2B_G (2, 7, 8, 13, m[quic_blake2b_sigma[r][12]],                \
+		       m[quic_blake2b_sigma[r][13]]);                           \
+      QUIC_BLAKE2B_G (3, 4, 9, 14, m[quic_blake2b_sigma[r][14]],                \
+		       m[quic_blake2b_sigma[r][15]]);                           \
+    }                                                                           \
+  while (0)
+
+  for (r = 0; r < ARRAY_LEN (quic_blake2b_sigma); r++)
+    QUIC_BLAKE2B_ROUND (r);
+
+#undef QUIC_BLAKE2B_ROUND
+#undef QUIC_BLAKE2B_G
+
+  for (i = 0; i < 8; i++)
+    st->h[i] ^= v[i] ^ v[i + 8];
+}
+
+static void
+quic_blake2b_init (quic_blake2b_state_t *st, u8 out_len)
+{
+  clib_memset (st, 0, sizeof (*st));
+  clib_memcpy (st->h, quic_blake2b_iv, sizeof (st->h));
+  st->h[0] ^= 0x01010000 ^ out_len;
+}
+
+static void
+quic_blake2b_update (quic_blake2b_state_t *st, const void *data, u32 len)
+{
+  const u8 *input = data;
+  u32 left, fill;
+
+  if (!len)
+    return;
+
+  left = st->buflen;
+  fill = QUIC_BLAKE2B_BLOCK_LEN - left;
+  if (len > fill)
+    {
+      clib_memcpy_fast (st->buf + left, input, fill);
+      quic_blake2b_increment (st, QUIC_BLAKE2B_BLOCK_LEN);
+      quic_blake2b_compress (st, st->buf, 0 /* is_last */);
+      input += fill;
+      len -= fill;
+      while (len > QUIC_BLAKE2B_BLOCK_LEN)
+	{
+	  quic_blake2b_increment (st, QUIC_BLAKE2B_BLOCK_LEN);
+	  quic_blake2b_compress (st, input, 0 /* is_last */);
+	  input += QUIC_BLAKE2B_BLOCK_LEN;
+	  len -= QUIC_BLAKE2B_BLOCK_LEN;
+	}
+      left = 0;
+    }
+
+  clib_memcpy_fast (st->buf + left, input, len);
+  st->buflen = left + len;
+}
+
+static void
+quic_blake2b_final (quic_blake2b_state_t *st, u8 *out, u8 out_len)
+{
+  u8 full_out[64];
+  u32 i;
+
+  quic_blake2b_increment (st, st->buflen);
+  clib_memset (st->buf + st->buflen, 0,
+	       QUIC_BLAKE2B_BLOCK_LEN - st->buflen);
+  quic_blake2b_compress (st, st->buf, 1 /* is_last */);
+
+  for (i = 0; i < ARRAY_LEN (st->h); i++)
+    quic_blake2b_store64 (full_out + i * sizeof (u64), st->h[i]);
+  clib_memcpy (out, full_out, out_len);
+}
 
 VLIB_PLUGIN_REGISTER () = {
   .version = VPP_BUILD_VER,
@@ -46,9 +253,78 @@ static_always_inline int
 quic_quicly_sendable_packet_count (session_t *udp_session)
 {
   u32 max_enqueue;
-  u32 packet_size = QUIC_MAX_PACKET_SIZE + SESSION_CONN_HDR_LEN;
+  u32 packet_size = QUIC_MAX_PACKET_SIZE + QUIC_PACKET_TRANSFORM_MAX_EXTRA +
+		    SESSION_CONN_HDR_LEN;
   max_enqueue = svm_fifo_max_enqueue (udp_session->tx_fifo);
   return clib_min (max_enqueue / packet_size, QUIC_QUICLY_SEND_PACKET_VEC_SIZE);
+}
+
+static int
+quic_quicly_salamander_mask (quic_ctx_t *ctx, const u8 *salt, u8 *mask)
+{
+  quic_blake2b_state_t st;
+
+  quic_blake2b_init (&st, QUIC_SALAMANDER_HASH_LEN);
+  quic_blake2b_update (&st, ctx->packet_transform_password,
+		       ctx->packet_transform_password_len);
+  quic_blake2b_update (&st, salt, QUIC_SALAMANDER_SALT_LEN);
+  quic_blake2b_final (&st, mask, QUIC_SALAMANDER_HASH_LEN);
+  return 0;
+}
+
+static int
+quic_quicly_packet_transform_tx (quic_ctx_t *ctx, struct iovec *packet, u8 *dst,
+				 u32 dst_len, u32 *out_len)
+{
+  u8 salt[QUIC_SALAMANDER_SALT_LEN];
+  u8 mask[QUIC_SALAMANDER_HASH_LEN];
+  u32 i, len = packet->iov_len;
+  u8 *src = packet->iov_base;
+
+  if (ctx->packet_transform != TRANSPORT_ENDPT_QUIC_PACKET_TRANSFORM_SALAMANDER)
+    {
+      *out_len = len;
+      clib_memcpy (dst, src, len);
+      return 0;
+    }
+
+  if (dst_len < len + QUIC_SALAMANDER_SALT_LEN)
+    return -1;
+  if (RAND_bytes (salt, sizeof (salt)) != 1)
+    {
+      QUIC_DBG (0, "salamander: RAND_bytes failed");
+      return -1;
+    }
+  if (quic_quicly_salamander_mask (ctx, salt, mask))
+    return -1;
+
+  clib_memcpy (dst, salt, sizeof (salt));
+  for (i = 0; i < len; i++)
+    dst[sizeof (salt) + i] = src[i] ^ mask[i % sizeof (mask)];
+  *out_len = len + sizeof (salt);
+  return 0;
+}
+
+static int
+quic_quicly_packet_transform_rx (quic_ctx_t *ctx, quic_quicly_rx_packet_ctx_t *pctx)
+{
+  u8 mask[QUIC_SALAMANDER_HASH_LEN];
+  u32 i, plain_len;
+  u8 *payload;
+
+  if (ctx->packet_transform != TRANSPORT_ENDPT_QUIC_PACKET_TRANSFORM_SALAMANDER)
+    return 0;
+  if (pctx->ph.data_length < QUIC_SALAMANDER_SALT_LEN)
+    return -1;
+  if (quic_quicly_salamander_mask (ctx, pctx->data, mask))
+    return -1;
+
+  payload = pctx->data + QUIC_SALAMANDER_SALT_LEN;
+  plain_len = pctx->ph.data_length - QUIC_SALAMANDER_SALT_LEN;
+  for (i = 0; i < plain_len; i++)
+    pctx->data[i] = payload[i] ^ mask[i % sizeof (mask)];
+  pctx->ph.data_length = plain_len;
+  return 0;
 }
 
 static_always_inline void
@@ -91,6 +367,20 @@ quic_quicly_connection_delete (quic_ctx_t *ctx)
   clib_memcpy_fast (&accepting_key.key, rcid->cid, rcid->len);
   clib_bihash_add_del_24_8 (&qqm->conn_accepting_hash, &accepting_key,
 			    0 /* is del */);
+
+  if (ctx->c_s_index != QUIC_SESSION_INVALID && ctx->datagram_closed_fn)
+    {
+      session_t *quic_session = session_get (ctx->c_s_index, ctx->c_thread_index);
+      ctx->datagram_closed_fn (session_handle (quic_session),
+			       ctx->datagram_opaque);
+      ctx->datagram_rx_fn = 0;
+      ctx->datagram_closed_fn = 0;
+      ctx->datagram_opaque = 0;
+    }
+
+  ctx->stream_accept_fn = 0;
+  ctx->stream_accept_opaque = 0;
+  ctx->stream_custom_app_wrk_id = 0;
 
   quic_disconnect_transport (ctx, qm->app_index);
   quicly_free (conn);
@@ -238,13 +528,22 @@ static int
 quic_quicly_send_datagram (session_t *udp_session, struct iovec *packet,
 			   ip46_address_t *rmt_ip, u16 rmt_port)
 {
-  u32 max_enqueue, len;
+  u32 max_enqueue, len, tx_len;
   session_dgram_hdr_t hdr;
   svm_fifo_t *f;
   transport_connection_t *tc;
+  quic_ctx_t *ctx;
+  u8 tx_buf[QUIC_MAX_PACKET_SIZE + QUIC_PACKET_TRANSFORM_MAX_EXTRA];
   int ret;
 
-  len = packet->iov_len;
+  ctx = pool_elt_at_index (
+    quic_wrk_ctx_get (quic_quicly_main.qm, udp_session->thread_index)
+      ->ctx_pool,
+    udp_session->opaque);
+  if (quic_quicly_packet_transform_tx (ctx, packet, tx_buf, sizeof (tx_buf),
+				       &tx_len))
+    return -1;
+  len = tx_len;
   f = udp_session->tx_fifo;
   tc = session_get_transport (udp_session);
   max_enqueue = svm_fifo_max_enqueue (f);
@@ -269,7 +568,7 @@ quic_quicly_send_datagram (session_t *udp_session, struct iovec *packet,
     }
 
   svm_fifo_seg_t segs[2] = { { (u8 *) &hdr, sizeof (hdr) },
-			     { packet->iov_base, len } };
+			     { tx_buf, len } };
 
   ret = svm_fifo_enqueue_segments (f, segs, 2, 0 /* allow partial */);
   ASSERT (ret > 0);
@@ -406,6 +705,19 @@ quicly_error:
   return 0;
 }
 
+static int
+quic_quicly_send_app_datagram (quic_ctx_t *ctx, const u8 *data, u32 data_len)
+{
+  ptls_iovec_t dgram;
+
+  if (!ctx->conn || !ctx->enable_datagrams)
+    return -1;
+
+  dgram = ptls_iovec_init ((void *) data, data_len);
+  quicly_send_datagram_frames (ctx->conn, &dgram, 1);
+  return quic_quicly_send_packets (ctx) >= 0 ? 0 : -1;
+}
+
 static_always_inline void
 quic_quicly_timer_expired (u32 conn_index)
 {
@@ -446,18 +758,11 @@ get_stream_session_and_ctx_from_stream (quicly_stream_t *stream,
 /* Quicly callbacks */
 
 static void
-quic_quicly_on_stream_destroy (quicly_stream_t *stream, quicly_error_t err)
+quic_quicly_on_stream_destroy (quicly_stream_t *stream, int err)
 {
   quic_stream_data_t *stream_data = (quic_stream_data_t *) stream->data;
   quic_ctx_t *sctx =
     quic_quicly_get_quic_ctx (stream_data->ctx_id, stream_data->thread_index);
-
-  QUIC_DBG (
-    2,
-    "DESTROYED_STREAM: stream_session handle 0x%lx, sctx_index %u, "
-    "thread %u, err %U",
-    session_handle (session_get (sctx->c_s_index, sctx->c_thread_index)),
-    sctx->c_c_index, sctx->c_thread_index, quic_quicly_format_err, err);
 
   sctx->flags |= QUIC_F_STREAM_TX_CLOSED;
   sctx->stream = 0;
@@ -572,7 +877,7 @@ quic_quicly_fifo_egress_emit (quicly_stream_t *stream, size_t off, void *dst,
 }
 
 static void
-quic_quicly_on_stop_sending (quicly_stream_t *stream, quicly_error_t quicly_error)
+quic_quicly_on_stop_sending (quicly_stream_t *stream, int quicly_error)
 {
   quic_stream_data_t *stream_data = (quic_stream_data_t *) stream->data;
   quic_ctx_t *sctx =
@@ -731,7 +1036,7 @@ quic_quicly_on_receive (quicly_stream_t *stream, size_t off, const void *src,
 }
 
 static void
-quic_quicly_on_receive_reset (quicly_stream_t *stream, quicly_error_t quicly_error)
+quic_quicly_on_receive_reset (quicly_stream_t *stream, int quicly_error)
 {
   quic_stream_data_t *stream_data = (quic_stream_data_t *) stream->data;
   quic_ctx_t *sctx =
@@ -773,7 +1078,7 @@ quic_quicly_store_conn_ctx (void *conn, quic_ctx_t *ctx)
     (void *) (((u64) ctx->c_thread_index) << 32 | (u64) ctx->c_c_index);
 }
 
-static quicly_error_t
+static int
 quic_quicly_on_stream_open (quicly_stream_open_t *self, quicly_stream_t *stream)
 {
   /* Return code for this function ends either
@@ -817,6 +1122,62 @@ quic_quicly_on_stream_open (quicly_stream_open_t *self, quicly_stream_t *stream)
 		qctx->c_c_index);
       return 0;
     }
+
+  /* Check for custom stream handler on bidirectional client-initiated
+   * streams. Unidirectional streams (HTTP/3 control, QPACK) always go to
+   * HTTP as before. */
+  if (!quicly_stream_is_unidirectional (stream->stream_id) &&
+      qctx->stream_accept_fn)
+    {
+      stream_session = session_alloc (qctx->c_thread_index);
+      stream_session->flags |= SESSION_F_STREAM;
+      QUIC_DBG (2, "CUSTOM STREAM ACCEPT stream_session 0x%lx ctx %u",
+		session_handle (stream_session), sctx_id);
+      sctx = quic_quicly_get_quic_ctx (sctx_id, qctx->c_thread_index);
+      sctx->parent_app_wrk_id = qctx->stream_custom_app_wrk_id;
+      sctx->parent_app_id = qctx->parent_app_id;
+      sctx->quic_connection_ctx_id = qctx->c_c_index;
+      sctx->c_c_index = sctx_id;
+      sctx->c_s_index = stream_session->session_index;
+      sctx->stream = stream;
+      sctx->c_flags |= TRANSPORT_CONNECTION_F_NO_LOOKUP;
+      sctx->flags |= QUIC_F_IS_STREAM;
+      sctx->crypto_context_index = qctx->crypto_context_index;
+      sctx->udp_session_handle = qctx->udp_session_handle;
+
+      stream_data = (quic_stream_data_t *) stream->data;
+      stream_data->ctx_id = sctx_id;
+      stream_data->thread_index = sctx->c_thread_index;
+      stream_data->app_rx_data_len = 0;
+      stream_data->app_tx_data_len = 0;
+
+      stream_session->session_state = SESSION_STATE_CREATED;
+      stream_session->app_wrk_index = qctx->stream_custom_app_wrk_id;
+      stream_session->connection_index = sctx->c_c_index;
+      stream_session->session_type =
+	session_type_from_proto_and_ip (TRANSPORT_PROTO_QUIC, qctx->udp_is_ip4);
+      quic_session = session_get (qctx->c_s_index, qctx->c_thread_index);
+      stream_session->listener_handle =
+	listen_session_get_handle (quic_session);
+
+      app_wrk = app_worker_get (stream_session->app_wrk_index);
+      if ((rv = app_worker_init_connected (app_wrk, stream_session)))
+	{
+	  QUIC_ERR ("failed to allocate fifos for custom stream");
+	  return -1;
+	}
+      svm_fifo_add_want_deq_ntf (stream_session->rx_fifo,
+				 SVM_FIFO_WANT_DEQ_NOTIF_IF_FULL |
+				   SVM_FIFO_WANT_DEQ_NOTIF_IF_EMPTY);
+      svm_fifo_init_ooo_lookup (stream_session->rx_fifo, 0 /* ooo enq */);
+      svm_fifo_init_ooo_lookup (stream_session->tx_fifo, 1 /* ooo deq */);
+
+      stream_session->session_state = SESSION_STATE_READY;
+      stream_session->flags |= SESSION_F_RX_READY;
+      return qctx->stream_accept_fn (stream_session,
+				     qctx->stream_accept_opaque);
+    }
+
   stream_session = session_alloc (qctx->c_thread_index);
   stream_session->flags |= SESSION_F_STREAM;
   QUIC_DBG (2, "ACCEPTED stream_session 0x%lx ctx %u",
@@ -874,7 +1235,7 @@ quic_quicly_on_stream_open (quicly_stream_open_t *self, quicly_stream_t *stream)
 
 static void
 quic_quicly_on_closed_by_remote (quicly_closed_by_remote_t *self, quicly_conn_t *conn,
-				 quicly_error_t code, uint64_t frame_type, const char *reason,
+				 int code, uint64_t frame_type, const char *reason,
 				 size_t reason_len)
 {
   quic_ctx_t *ctx = quic_quicly_get_conn_ctx (conn);
@@ -911,6 +1272,23 @@ quic_quicly_on_closed_by_remote (quicly_closed_by_remote_t *self, quicly_conn_t 
     }
 }
 
+static void
+quic_quicly_on_receive_datagram_frame (quicly_receive_datagram_frame_t *self,
+				       quicly_conn_t *conn,
+				       ptls_iovec_t payload)
+{
+  quic_ctx_t *ctx = quic_quicly_get_conn_ctx (conn);
+  session_t *quic_session;
+
+  quic_quicly_check_quic_session_connected (ctx);
+  if (ctx->c_s_index == QUIC_SESSION_INVALID || !ctx->datagram_rx_fn)
+    return;
+
+  quic_session = session_get (ctx->c_s_index, ctx->c_thread_index);
+  ctx->datagram_rx_fn (session_handle (quic_session), payload.base,
+		       payload.len, ctx->datagram_opaque);
+}
+
 static int64_t
 quic_quicly_get_time (quicly_now_t *self)
 {
@@ -922,6 +1300,9 @@ quic_quicly_get_time (quicly_now_t *self)
 static quicly_stream_open_t on_stream_open = { quic_quicly_on_stream_open };
 static quicly_closed_by_remote_t on_closed_by_remote = {
   quic_quicly_on_closed_by_remote
+};
+static quicly_receive_datagram_frame_t on_receive_datagram_frame = {
+  quic_quicly_on_receive_datagram_frame
 };
 static quicly_now_t quicly_vpp_now_cb = { quic_quicly_get_time };
 
@@ -946,6 +1327,8 @@ quic_quicly_crypto_ctx_get_or_init (quic_ctx_t *ctx)
     {
       crctx->quicly_ctx.stream_open = &on_stream_open;
       crctx->quicly_ctx.closed_by_remote = &on_closed_by_remote;
+      crctx->quicly_ctx.receive_datagram_frame =
+	ctx->enable_datagrams ? &on_receive_datagram_frame : 0;
       crctx->quicly_ctx.now = &quicly_vpp_now_cb;
     }
   return 0;
@@ -1127,8 +1510,6 @@ quic_quicly_on_app_closed (u32 ctx_index, clib_thread_index_t thread_index)
 	  QUIC_DBG (2, "send side already closed");
 	  return;
 	}
-      QUIC_DBG (2, "App closed stream, ctx_index %u thread_index %u",
-		ctx->c_c_index, ctx->c_thread_index);
       quicly_sendstate_shutdown (
 	&stream->sendstate,
 	ctx->bytes_written + svm_fifo_max_dequeue (stream_session->tx_fifo));
@@ -1534,6 +1915,15 @@ quic_quicly_process_one_rx_packet (u64 udp_session_handle, svm_fifo_t *f,
       return 1;
     }
 
+  udp_session = session_get_from_handle (udp_session_handle);
+  if (quic_quicly_packet_transform_rx (
+	quic_quicly_get_quic_ctx (udp_session->opaque, udp_session->thread_index),
+	pctx))
+    {
+      QUIC_DBG (0, "packet transform failed");
+      return 1;
+    }
+
   quic_increment_counter (quic_quicly_main.qm, QUIC_ERROR_RX_PACKETS, 1);
   quic_build_sockaddr (&pctx->sa, &pctx->salen, &pctx->ph.rmt_ip,
 		       pctx->ph.rmt_port, pctx->ph.is_ip4);
@@ -1567,7 +1957,6 @@ quic_quicly_process_one_rx_packet (u64 udp_session_handle, svm_fifo_t *f,
   else if (QUICLY_PACKET_IS_LONG_HEADER (pctx->packet.octets.base[0]))
     {
       pctx->ptype = QUIC_PACKET_TYPE_ACCEPT;
-      udp_session = session_get_from_handle (udp_session_handle);
       pctx->ctx_index = udp_session->opaque;
       pctx->thread_index = thread_index;
     }
@@ -1734,7 +2123,7 @@ quic_quicly_connect_stream (void *quic_conn, void **quic_stream,
 {
   quicly_conn_t *conn = quic_conn;
   quicly_stream_t *quicly_stream;
-  quicly_error_t rv;
+  int rv;
 
   rv = quicly_open_stream (conn, (quicly_stream_t **) quic_stream, is_unidir);
   if (rv)
@@ -2041,6 +2430,7 @@ const static quic_engine_vft_t quic_quicly_engine_vft = {
   .ack_rx_data = quic_quicly_ack_rx_data,
   .stream_tx = quic_quicly_stream_tx,
   .send_packets = quic_quicly_send_packets,
+  .send_datagram = quic_quicly_send_app_datagram,
   .format_connection_stats = quic_quicly_format_connection_stats,
   .format_stream_stats = quic_quicly_format_stream_stats,
   .stream_get_stream_id = quic_quicly_stream_get_stream_id,

@@ -1,0 +1,6 @@
+server: {{.ServerAddr}}
+auth: {{.AuthSecret}}
+tls:
+  insecure: true
+socks5:
+  listen: {{.SocksAddr}}
