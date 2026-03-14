@@ -148,11 +148,9 @@ typedef enum quic_cc_type
   QUIC_CC_CUBIC,
 } quic_cc_type_t;
 
-typedef void (quic_datagram_rx_fn_t) (session_handle_t quic_session_handle,
-				      const u8 *data, u32 data_len,
-				      void *opaque);
-typedef void (quic_datagram_closed_fn_t) (session_handle_t quic_session_handle,
-					  void *opaque);
+typedef void (quic_datagram_rx_fn_t) (session_handle_t quic_session_handle, const u8 *data,
+				      u32 data_len, void *opaque);
+typedef void (quic_datagram_closed_fn_t) (session_handle_t quic_session_handle, void *opaque);
 typedef int (quic_stream_accept_fn_t) (session_t *stream_session, void *opaque);
 
 /* This structure is used to implement the concept of VPP connection for QUIC.
@@ -441,6 +439,7 @@ typedef struct quic_engine_vft_
   void (*proto_on_reset) (u32 ctx_index, clib_thread_index_t thread_index);
   void (*transport_closed) (quic_ctx_t *ctx);
   int (*ctx_attribute) (quic_ctx_t *ctx, u8 is_get, transport_endpt_attr_t *attr);
+  int (*set_cc_brutal) (void *conn, u64 target_rate_bytes_per_sec);
 } quic_engine_vft_t;
 
 extern quic_engine_vft_t *quic_engine_vfts;
@@ -449,17 +448,13 @@ extern void quic_register_engine (const quic_engine_vft_t *vft,
 typedef void (*quic_register_engine_fn) (const quic_engine_vft_t *vft,
 					 quic_engine_type_t engine_type);
 
-int quic_custom_datagram_bind (session_handle_t quic_session_handle,
-			       quic_datagram_rx_fn_t *rx_fn,
-			       quic_datagram_closed_fn_t *closed_fn,
-			       void *opaque);
+int quic_custom_datagram_bind (session_handle_t quic_session_handle, quic_datagram_rx_fn_t *rx_fn,
+			       quic_datagram_closed_fn_t *closed_fn, void *opaque);
 void quic_custom_datagram_unbind (session_handle_t quic_session_handle);
-int quic_custom_datagram_send (session_handle_t quic_session_handle,
-			       const u8 *data, u32 data_len);
+int quic_custom_datagram_send (session_handle_t quic_session_handle, const u8 *data, u32 data_len);
 
 int quic_custom_stream_bind (session_handle_t quic_session_handle,
-			     quic_stream_accept_fn_t *accept_fn, void *opaque,
-			     u32 app_wrk_index);
+			     quic_stream_accept_fn_t *accept_fn, void *opaque, u32 app_wrk_index);
 void quic_custom_stream_unbind (session_handle_t quic_session_handle);
 
 void quic_update_fifo_size ();

@@ -138,8 +138,16 @@ quic_eng_send_datagram (quic_ctx_t *ctx, const u8 *data, u32 data_len)
   quic_main_t *qm = &quic_main;
   if (PREDICT_FALSE (!quic_engine_vfts[qm->engine_type].send_datagram))
     return -1;
-  return (quic_engine_vfts[qm->engine_type].send_datagram (ctx, data,
-							   data_len));
+  return (quic_engine_vfts[qm->engine_type].send_datagram (ctx, data, data_len));
+}
+
+static_always_inline int
+quic_eng_set_cc_brutal (void *conn, u64 target_rate_bytes_per_sec)
+{
+  quic_main_t *qm = &quic_main;
+  if (PREDICT_FALSE (!quic_engine_vfts[qm->engine_type].set_cc_brutal))
+    return -1;
+  return (quic_engine_vfts[qm->engine_type].set_cc_brutal (conn, target_rate_bytes_per_sec));
 }
 
 static_always_inline u8 *

@@ -81,10 +81,8 @@ quic_quicly_crypto_context_make_key_from_ctx (clib_bihash_kv_24_8_t *kv,
 					      quic_ctx_t *ctx)
 {
   application_t *app = application_get (ctx->parent_app_id);
-  kv->key[0] =
-    ((u64) ctx->ckpair_index) << 32 |
-    (u64) (ctx->verify_cfg << 24) |
-    (u64) (ctx->enable_datagrams << 16) | (u64) ctx->crypto_engine;
+  kv->key[0] = ((u64) ctx->ckpair_index) << 32 | (u64) (ctx->verify_cfg << 24) |
+	       (u64) (ctx->enable_datagrams << 16) | (u64) ctx->crypto_engine;
   kv->key[1] = app->sm_properties.rx_fifo_size - 1;
   kv->key[2] = app->sm_properties.tx_fifo_size - 1;
 }
@@ -93,10 +91,8 @@ static_always_inline void
 quic_quicly_crypto_context_make_key_from_crctx (clib_bihash_kv_24_8_t *kv,
 						quic_quicly_crypto_ctx_t *crctx)
 {
-  kv->key[0] = ((u64) crctx->ctx.ckpair_index) << 32 |
-	       (u64) (crctx->verify_cfg << 24) |
-	       (u64) ((crctx->quicly_ctx.transport_params.max_datagram_frame_size != 0)
-		      << 16) |
+  kv->key[0] = ((u64) crctx->ctx.ckpair_index) << 32 | (u64) (crctx->verify_cfg << 24) |
+	       (u64) ((crctx->quicly_ctx.transport_params.max_datagram_frame_size != 0) << 16) |
 	       (u64) crctx->ctx.crypto_engine;
   kv->key[1] = crctx->quicly_ctx.transport_params.max_stream_data.bidi_local;
   kv->key[2] = crctx->quicly_ctx.transport_params.max_stream_data.bidi_remote;
@@ -916,39 +912,114 @@ quic_quicly_encrypt_ticket_cb (ptls_encrypt_ticket_t *_self, ptls_t *tls,
 
   if (is_encrypt)
     {
+      quic_session_cache_entry_t *entry;
+      clib_bihash_kv_24_8_t kv = {};
+      u8 id[32];
+      u32 idx;
 
-      /* replace the cached entry along with a newly generated session id */
-      if (self->data.base)
-	clib_mem_free (self->data.base);
-      if ((self->data.base = clib_mem_alloc (src.len)) == NULL)
-	return PTLS_ERROR_NO_MEMORY;
+      ptls_get_context (tls)->random_bytes (id, sizeof (id));
 
-      ptls_get_context (tls)->random_bytes (self->id, sizeof (self->id));
-      clib_memcpy (self->data.base, src.base, src.len);
-      self->data.len = src.len;
+      clib_spinlock_lock (&self->lock);
 
-      /* store the session id in buffer */
-      if ((ret = ptls_buffer_reserve (dst, sizeof (self->id))) != 0)
+      /* Evict oldest (FIFO) entry if cache is full */
+      if (self->evict_count >= QUIC_SESSION_CACHE_MAX_ENTRIES)
+	{
+	  u32 victim_idx = self->evict_fifo[self->evict_head % QUIC_SESSION_CACHE_MAX_ENTRIES];
+	  self->evict_head++;
+	  self->evict_count--;
+	  if (!pool_is_free_index (self->entries, victim_idx))
+	    {
+	      quic_session_cache_entry_t *e = pool_elt_at_index (self->entries, victim_idx);
+	      clib_memcpy (&kv.key, e->id, 24);
+	      clib_bihash_add_del_24_8 (&self->id_hash, &kv, 0 /* del */);
+	      clib_mem_free (e->data);
+	      pool_put (self->entries, e);
+	    }
+	}
+
+      pool_get_zero (self->entries, entry);
+      idx = entry - self->entries;
+      clib_memcpy (entry->id, id, 32);
+      entry->data = clib_mem_alloc (src.len);
+      if (!entry->data)
+	{
+	  pool_put (self->entries, entry);
+	  clib_spinlock_unlock (&self->lock);
+	  return PTLS_ERROR_NO_MEMORY;
+	}
+      clib_memcpy (entry->data, src.base, src.len);
+      entry->data_len = src.len;
+
+      clib_memcpy (&kv.key, id, 24);
+      kv.value = idx;
+      clib_bihash_add_del_24_8 (&self->id_hash, &kv, 1 /* add */);
+
+      /* Track insertion order for FIFO eviction */
+      if (!self->evict_fifo)
+	vec_validate (self->evict_fifo, QUIC_SESSION_CACHE_MAX_ENTRIES - 1);
+      self->evict_fifo[(self->evict_head + self->evict_count) % QUIC_SESSION_CACHE_MAX_ENTRIES] =
+	idx;
+      self->evict_count++;
+
+      clib_spinlock_unlock (&self->lock);
+
+      if ((ret = ptls_buffer_reserve (dst, sizeof (id))) != 0)
 	return ret;
-      clib_memcpy (dst->base + dst->off, self->id, sizeof (self->id));
-      dst->off += sizeof (self->id);
+      clib_memcpy (dst->base + dst->off, id, sizeof (id));
+      dst->off += sizeof (id);
     }
   else
     {
-      /* check if session id is the one stored in cache */
-      if (src.len != sizeof (self->id))
-	return PTLS_ERROR_SESSION_NOT_FOUND;
-      if (clib_memcmp (self->id, src.base, sizeof (self->id)) != 0)
+      clib_bihash_kv_24_8_t kv = {};
+      quic_session_cache_entry_t *entry;
+
+      if (src.len != 32)
 	return PTLS_ERROR_SESSION_NOT_FOUND;
 
-      /* return the cached value */
-      if ((ret = ptls_buffer_reserve (dst, self->data.len)) != 0)
-	return ret;
-      clib_memcpy (dst->base + dst->off, self->data.base, self->data.len);
-      dst->off += self->data.len;
+      clib_memcpy (&kv.key, src.base, 24);
+
+      clib_spinlock_lock (&self->lock);
+      if (clib_bihash_search_24_8 (&self->id_hash, &kv, &kv) != 0)
+	{
+	  clib_spinlock_unlock (&self->lock);
+	  return PTLS_ERROR_SESSION_NOT_FOUND;
+	}
+
+      if (pool_is_free_index (self->entries, kv.value))
+	{
+	  clib_spinlock_unlock (&self->lock);
+	  return PTLS_ERROR_SESSION_NOT_FOUND;
+	}
+      entry = pool_elt_at_index (self->entries, kv.value);
+
+      /* Verify full 32-byte session ID match */
+      if (clib_memcmp (entry->id, src.base, 32) != 0)
+	{
+	  clib_spinlock_unlock (&self->lock);
+	  return PTLS_ERROR_SESSION_NOT_FOUND;
+	}
+
+      if ((ret = ptls_buffer_reserve (dst, entry->data_len)) != 0)
+	{
+	  clib_spinlock_unlock (&self->lock);
+	  return ret;
+	}
+      clib_memcpy (dst->base + dst->off, entry->data, entry->data_len);
+      dst->off += entry->data_len;
+      clib_spinlock_unlock (&self->lock);
     }
 
   return 0;
+}
+
+int
+quic_quicly_generate_resumption_token_cb (quicly_generate_resumption_token_t *_self,
+					  quicly_conn_t *conn, ptls_buffer_t *buf,
+					  quicly_address_token_plaintext_t *token)
+{
+  quic_quicly_token_ctx_t *self = (quic_quicly_token_ctx_t *) _self;
+  return quicly_encrypt_address_token (ptls_openssl_random_bytes, self->aead_enc, buf, buf->off,
+				       token);
 }
 
 ptls_cipher_algorithm_t quic_quicly_crypto_aes128ctr = {

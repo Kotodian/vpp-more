@@ -30,17 +30,11 @@ quic_quicly_main_t quic_quicly_main;
  */
 #define QUIC_SALAMANDER_SALT_LEN 8
 #define QUIC_SALAMANDER_HASH_LEN 32
-#define QUIC_BLAKE2B_BLOCK_LEN 128
+#define QUIC_BLAKE2B_BLOCK_LEN	 128
 
 static const u64 quic_blake2b_iv[8] = {
-  0x6a09e667f3bcc908ULL,
-  0xbb67ae8584caa73bULL,
-  0x3c6ef372fe94f82bULL,
-  0xa54ff53a5f1d36f1ULL,
-  0x510e527fade682d1ULL,
-  0x9b05688c2b3e6c1fULL,
-  0x1f83d9abfb41bd6bULL,
-  0x5be0cd19137e2179ULL,
+  0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL, 0x3c6ef372fe94f82bULL, 0xa54ff53a5f1d36f1ULL,
+  0x510e527fade682d1ULL, 0x9b05688c2b3e6c1fULL, 0x1f83d9abfb41bd6bULL, 0x5be0cd19137e2179ULL,
 };
 
 static const u8 quic_blake2b_sigma[12][16] = {
@@ -72,9 +66,8 @@ quic_blake2b_load64 (const void *src)
 {
   const u8 *p = src;
 
-  return ((u64) p[0]) | ((u64) p[1] << 8) | ((u64) p[2] << 16) |
-	 ((u64) p[3] << 24) | ((u64) p[4] << 32) | ((u64) p[5] << 40) |
-	 ((u64) p[6] << 48) | ((u64) p[7] << 56);
+  return ((u64) p[0]) | ((u64) p[1] << 8) | ((u64) p[2] << 16) | ((u64) p[3] << 24) |
+	 ((u64) p[4] << 32) | ((u64) p[5] << 40) | ((u64) p[6] << 48) | ((u64) p[7] << 56);
 }
 
 static_always_inline void
@@ -107,8 +100,7 @@ quic_blake2b_increment (quic_blake2b_state_t *st, u32 len)
 }
 
 static void
-quic_blake2b_compress (quic_blake2b_state_t *st, const u8 block[128],
-		       u8 is_last)
+quic_blake2b_compress (quic_blake2b_state_t *st, const u8 block[128], u8 is_last)
 {
   u64 m[16], v[16];
   u32 i, r;
@@ -126,40 +118,32 @@ quic_blake2b_compress (quic_blake2b_state_t *st, const u8 block[128],
   if (is_last)
     v[14] = ~v[14];
 
-#define QUIC_BLAKE2B_G(a, b, c, d, x, y)                                       \
-  do                                                                            \
-    {                                                                           \
-      v[a] = v[a] + v[b] + (x);                                                 \
-      v[d] = quic_blake2b_rot64 (v[d] ^ v[a], 32);                              \
-      v[c] += v[d];                                                             \
-      v[b] = quic_blake2b_rot64 (v[b] ^ v[c], 24);                              \
-      v[a] = v[a] + v[b] + (y);                                                 \
-      v[d] = quic_blake2b_rot64 (v[d] ^ v[a], 16);                              \
-      v[c] += v[d];                                                             \
-      v[b] = quic_blake2b_rot64 (v[b] ^ v[c], 63);                              \
-    }                                                                           \
+#define QUIC_BLAKE2B_G(a, b, c, d, x, y)                                                           \
+  do                                                                                               \
+    {                                                                                              \
+      v[a] = v[a] + v[b] + (x);                                                                    \
+      v[d] = quic_blake2b_rot64 (v[d] ^ v[a], 32);                                                 \
+      v[c] += v[d];                                                                                \
+      v[b] = quic_blake2b_rot64 (v[b] ^ v[c], 24);                                                 \
+      v[a] = v[a] + v[b] + (y);                                                                    \
+      v[d] = quic_blake2b_rot64 (v[d] ^ v[a], 16);                                                 \
+      v[c] += v[d];                                                                                \
+      v[b] = quic_blake2b_rot64 (v[b] ^ v[c], 63);                                                 \
+    }                                                                                              \
   while (0)
 
-#define QUIC_BLAKE2B_ROUND(r)                                                   \
-  do                                                                            \
-    {                                                                           \
-      QUIC_BLAKE2B_G (0, 4, 8, 12, m[quic_blake2b_sigma[r][0]],                 \
-		       m[quic_blake2b_sigma[r][1]]);                            \
-      QUIC_BLAKE2B_G (1, 5, 9, 13, m[quic_blake2b_sigma[r][2]],                 \
-		       m[quic_blake2b_sigma[r][3]]);                            \
-      QUIC_BLAKE2B_G (2, 6, 10, 14, m[quic_blake2b_sigma[r][4]],                \
-		       m[quic_blake2b_sigma[r][5]]);                            \
-      QUIC_BLAKE2B_G (3, 7, 11, 15, m[quic_blake2b_sigma[r][6]],                \
-		       m[quic_blake2b_sigma[r][7]]);                            \
-      QUIC_BLAKE2B_G (0, 5, 10, 15, m[quic_blake2b_sigma[r][8]],                \
-		       m[quic_blake2b_sigma[r][9]]);                            \
-      QUIC_BLAKE2B_G (1, 6, 11, 12, m[quic_blake2b_sigma[r][10]],               \
-		       m[quic_blake2b_sigma[r][11]]);                           \
-      QUIC_BLAKE2B_G (2, 7, 8, 13, m[quic_blake2b_sigma[r][12]],                \
-		       m[quic_blake2b_sigma[r][13]]);                           \
-      QUIC_BLAKE2B_G (3, 4, 9, 14, m[quic_blake2b_sigma[r][14]],                \
-		       m[quic_blake2b_sigma[r][15]]);                           \
-    }                                                                           \
+#define QUIC_BLAKE2B_ROUND(r)                                                                      \
+  do                                                                                               \
+    {                                                                                              \
+      QUIC_BLAKE2B_G (0, 4, 8, 12, m[quic_blake2b_sigma[r][0]], m[quic_blake2b_sigma[r][1]]);      \
+      QUIC_BLAKE2B_G (1, 5, 9, 13, m[quic_blake2b_sigma[r][2]], m[quic_blake2b_sigma[r][3]]);      \
+      QUIC_BLAKE2B_G (2, 6, 10, 14, m[quic_blake2b_sigma[r][4]], m[quic_blake2b_sigma[r][5]]);     \
+      QUIC_BLAKE2B_G (3, 7, 11, 15, m[quic_blake2b_sigma[r][6]], m[quic_blake2b_sigma[r][7]]);     \
+      QUIC_BLAKE2B_G (0, 5, 10, 15, m[quic_blake2b_sigma[r][8]], m[quic_blake2b_sigma[r][9]]);     \
+      QUIC_BLAKE2B_G (1, 6, 11, 12, m[quic_blake2b_sigma[r][10]], m[quic_blake2b_sigma[r][11]]);   \
+      QUIC_BLAKE2B_G (2, 7, 8, 13, m[quic_blake2b_sigma[r][12]], m[quic_blake2b_sigma[r][13]]);    \
+      QUIC_BLAKE2B_G (3, 4, 9, 14, m[quic_blake2b_sigma[r][14]], m[quic_blake2b_sigma[r][15]]);    \
+    }                                                                                              \
   while (0)
 
   for (r = 0; r < ARRAY_LEN (quic_blake2b_sigma); r++)
@@ -219,8 +203,7 @@ quic_blake2b_final (quic_blake2b_state_t *st, u8 *out, u8 out_len)
   u32 i;
 
   quic_blake2b_increment (st, st->buflen);
-  clib_memset (st->buf + st->buflen, 0,
-	       QUIC_BLAKE2B_BLOCK_LEN - st->buflen);
+  clib_memset (st->buf + st->buflen, 0, QUIC_BLAKE2B_BLOCK_LEN - st->buflen);
   quic_blake2b_compress (st, st->buf, 1 /* is_last */);
 
   for (i = 0; i < ARRAY_LEN (st->h); i++)
@@ -253,8 +236,7 @@ static_always_inline int
 quic_quicly_sendable_packet_count (session_t *udp_session)
 {
   u32 max_enqueue;
-  u32 packet_size = QUIC_MAX_PACKET_SIZE + QUIC_PACKET_TRANSFORM_MAX_EXTRA +
-		    SESSION_CONN_HDR_LEN;
+  u32 packet_size = QUIC_MAX_PACKET_SIZE + QUIC_PACKET_TRANSFORM_MAX_EXTRA + SESSION_CONN_HDR_LEN;
   max_enqueue = svm_fifo_max_enqueue (udp_session->tx_fifo);
   return clib_min (max_enqueue / packet_size, QUIC_QUICLY_SEND_PACKET_VEC_SIZE);
 }
@@ -265,16 +247,15 @@ quic_quicly_salamander_mask (quic_ctx_t *ctx, const u8 *salt, u8 *mask)
   quic_blake2b_state_t st;
 
   quic_blake2b_init (&st, QUIC_SALAMANDER_HASH_LEN);
-  quic_blake2b_update (&st, ctx->packet_transform_password,
-		       ctx->packet_transform_password_len);
+  quic_blake2b_update (&st, ctx->packet_transform_password, ctx->packet_transform_password_len);
   quic_blake2b_update (&st, salt, QUIC_SALAMANDER_SALT_LEN);
   quic_blake2b_final (&st, mask, QUIC_SALAMANDER_HASH_LEN);
   return 0;
 }
 
 static int
-quic_quicly_packet_transform_tx (quic_ctx_t *ctx, struct iovec *packet, u8 *dst,
-				 u32 dst_len, u32 *out_len)
+quic_quicly_packet_transform_tx (quic_ctx_t *ctx, struct iovec *packet, u8 *dst, u32 dst_len,
+				 u32 *out_len)
 {
   u8 salt[QUIC_SALAMANDER_SALT_LEN];
   u8 mask[QUIC_SALAMANDER_HASH_LEN];
@@ -371,8 +352,7 @@ quic_quicly_connection_delete (quic_ctx_t *ctx)
   if (ctx->c_s_index != QUIC_SESSION_INVALID && ctx->datagram_closed_fn)
     {
       session_t *quic_session = session_get (ctx->c_s_index, ctx->c_thread_index);
-      ctx->datagram_closed_fn (session_handle (quic_session),
-			       ctx->datagram_opaque);
+      ctx->datagram_closed_fn (session_handle (quic_session), ctx->datagram_opaque);
       ctx->datagram_rx_fn = 0;
       ctx->datagram_closed_fn = 0;
       ctx->datagram_opaque = 0;
@@ -536,12 +516,10 @@ quic_quicly_send_datagram (session_t *udp_session, struct iovec *packet,
   u8 tx_buf[QUIC_MAX_PACKET_SIZE + QUIC_PACKET_TRANSFORM_MAX_EXTRA];
   int ret;
 
-  ctx = pool_elt_at_index (
-    quic_wrk_ctx_get (quic_quicly_main.qm, udp_session->thread_index)
-      ->ctx_pool,
-    udp_session->opaque);
-  if (quic_quicly_packet_transform_tx (ctx, packet, tx_buf, sizeof (tx_buf),
-				       &tx_len))
+  ctx =
+    pool_elt_at_index (quic_wrk_ctx_get (quic_quicly_main.qm, udp_session->thread_index)->ctx_pool,
+		       udp_session->opaque);
+  if (quic_quicly_packet_transform_tx (ctx, packet, tx_buf, sizeof (tx_buf), &tx_len))
     return -1;
   len = tx_len;
   f = udp_session->tx_fifo;
@@ -567,8 +545,7 @@ quic_quicly_send_datagram (session_t *udp_session, struct iovec *packet,
       clib_memcpy_fast (&hdr.rmt_ip.ip6, &rmt_ip->ip6, sizeof (rmt_ip->ip6));
     }
 
-  svm_fifo_seg_t segs[2] = { { (u8 *) &hdr, sizeof (hdr) },
-			     { tx_buf, len } };
+  svm_fifo_seg_t segs[2] = { { (u8 *) &hdr, sizeof (hdr) }, { tx_buf, len } };
 
   ret = svm_fifo_enqueue_segments (f, segs, 2, 0 /* allow partial */);
   ASSERT (ret > 0);
@@ -1126,8 +1103,7 @@ quic_quicly_on_stream_open (quicly_stream_open_t *self, quicly_stream_t *stream)
   /* Check for custom stream handler on bidirectional client-initiated
    * streams. Unidirectional streams (HTTP/3 control, QPACK) always go to
    * HTTP as before. */
-  if (!quicly_stream_is_unidirectional (stream->stream_id) &&
-      qctx->stream_accept_fn)
+  if (!quicly_stream_is_unidirectional (stream->stream_id) && qctx->stream_accept_fn)
     {
       stream_session = session_alloc (qctx->c_thread_index);
       stream_session->flags |= SESSION_F_STREAM;
@@ -1157,8 +1133,7 @@ quic_quicly_on_stream_open (quicly_stream_open_t *self, quicly_stream_t *stream)
       stream_session->session_type =
 	session_type_from_proto_and_ip (TRANSPORT_PROTO_QUIC, qctx->udp_is_ip4);
       quic_session = session_get (qctx->c_s_index, qctx->c_thread_index);
-      stream_session->listener_handle =
-	listen_session_get_handle (quic_session);
+      stream_session->listener_handle = listen_session_get_handle (quic_session);
 
       app_wrk = app_worker_get (stream_session->app_wrk_index);
       if ((rv = app_worker_init_connected (app_wrk, stream_session)))
@@ -1166,16 +1141,14 @@ quic_quicly_on_stream_open (quicly_stream_open_t *self, quicly_stream_t *stream)
 	  QUIC_ERR ("failed to allocate fifos for custom stream");
 	  return -1;
 	}
-      svm_fifo_add_want_deq_ntf (stream_session->rx_fifo,
-				 SVM_FIFO_WANT_DEQ_NOTIF_IF_FULL |
-				   SVM_FIFO_WANT_DEQ_NOTIF_IF_EMPTY);
+      svm_fifo_add_want_deq_ntf (stream_session->rx_fifo, SVM_FIFO_WANT_DEQ_NOTIF_IF_FULL |
+							    SVM_FIFO_WANT_DEQ_NOTIF_IF_EMPTY);
       svm_fifo_init_ooo_lookup (stream_session->rx_fifo, 0 /* ooo enq */);
       svm_fifo_init_ooo_lookup (stream_session->tx_fifo, 1 /* ooo deq */);
 
       stream_session->session_state = SESSION_STATE_READY;
       stream_session->flags |= SESSION_F_RX_READY;
-      return qctx->stream_accept_fn (stream_session,
-				     qctx->stream_accept_opaque);
+      return qctx->stream_accept_fn (stream_session, qctx->stream_accept_opaque);
     }
 
   stream_session = session_alloc (qctx->c_thread_index);
@@ -1234,9 +1207,8 @@ quic_quicly_on_stream_open (quicly_stream_open_t *self, quicly_stream_t *stream)
 }
 
 static void
-quic_quicly_on_closed_by_remote (quicly_closed_by_remote_t *self, quicly_conn_t *conn,
-				 int code, uint64_t frame_type, const char *reason,
-				 size_t reason_len)
+quic_quicly_on_closed_by_remote (quicly_closed_by_remote_t *self, quicly_conn_t *conn, int code,
+				 uint64_t frame_type, const char *reason, size_t reason_len)
 {
   quic_ctx_t *ctx = quic_quicly_get_conn_ctx (conn);
 #if QUIC_DEBUG >= 2
@@ -1273,8 +1245,7 @@ quic_quicly_on_closed_by_remote (quicly_closed_by_remote_t *self, quicly_conn_t 
 }
 
 static void
-quic_quicly_on_receive_datagram_frame (quicly_receive_datagram_frame_t *self,
-				       quicly_conn_t *conn,
+quic_quicly_on_receive_datagram_frame (quicly_receive_datagram_frame_t *self, quicly_conn_t *conn,
 				       ptls_iovec_t payload)
 {
   quic_ctx_t *ctx = quic_quicly_get_conn_ctx (conn);
@@ -1285,8 +1256,8 @@ quic_quicly_on_receive_datagram_frame (quicly_receive_datagram_frame_t *self,
     return;
 
   quic_session = session_get (ctx->c_s_index, ctx->c_thread_index);
-  ctx->datagram_rx_fn (session_handle (quic_session), payload.base,
-		       payload.len, ctx->datagram_opaque);
+  ctx->datagram_rx_fn (session_handle (quic_session), payload.base, payload.len,
+		       ctx->datagram_opaque);
 }
 
 static int64_t
@@ -1325,11 +1296,14 @@ quic_quicly_crypto_ctx_get_or_init (quic_ctx_t *ctx)
   quic_quicly_crypto_ctx_t *crctx = quic_quicly_crypto_context_get_or_alloc (ctx);
   if (PREDICT_FALSE (!crctx->quicly_ctx.stream_open))
     {
+      quic_quicly_main_t *qqm = &quic_quicly_main;
       crctx->quicly_ctx.stream_open = &on_stream_open;
       crctx->quicly_ctx.closed_by_remote = &on_closed_by_remote;
       crctx->quicly_ctx.receive_datagram_frame =
 	ctx->enable_datagrams ? &on_receive_datagram_frame : 0;
       crctx->quicly_ctx.now = &quicly_vpp_now_cb;
+      crctx->quicly_ctx.generate_resumption_token =
+	qqm->token_ctx.super.cb ? &qqm->token_ctx.super : 0;
     }
   return 0;
 }
@@ -1794,6 +1768,84 @@ quic_quicly_on_quic_session_accepted (quic_ctx_t *ctx)
 
   ctx->parent_app_wrk_id = quic_session->app_wrk_index;
   ctx->conn_state = QUIC_CONN_STATE_READY;
+
+  /* Send NEW_TOKEN to client so it can do 0-RTT on reconnection */
+  quicly_send_resumption_token (ctx->conn);
+}
+
+static int
+quic_quicly_validate_address_token (quicly_context_t *quicly_ctx, struct sockaddr *remote,
+				    ptls_iovec_t client_cid, ptls_iovec_t server_cid,
+				    quicly_address_token_plaintext_t *token, const char **err_desc)
+{
+  int64_t age;
+
+  if ((age = quicly_ctx->now->cb (quicly_ctx->now) - token->issued_at) < 0)
+    age = 0;
+
+  switch (token->type)
+    {
+    case QUICLY_ADDRESS_TOKEN_TYPE_RETRY:
+      if (age > 30000)
+	goto Expired;
+      if (!quicly_cid_is_equal (&token->retry.client_cid, client_cid))
+	goto CIDMismatch;
+      if (!quicly_cid_is_equal (&token->retry.server_cid, server_cid))
+	goto CIDMismatch;
+      break;
+    case QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION:
+      if (age > 10 * 60 * 1000)
+	goto Expired;
+      break;
+    default:
+      *err_desc = "unexpected token type";
+      return 0;
+    }
+
+  if (remote->sa_family != token->remote.sa.sa_family)
+    goto AddressMismatch;
+
+  switch (remote->sa_family)
+    {
+    case AF_INET:
+      {
+	struct sockaddr_in *sin = (struct sockaddr_in *) remote;
+	if (sin->sin_addr.s_addr != token->remote.sin.sin_addr.s_addr)
+	  goto AddressMismatch;
+	if (token->type == QUICLY_ADDRESS_TOKEN_TYPE_RETRY &&
+	    sin->sin_port != token->remote.sin.sin_port)
+	  goto AddressMismatch;
+      }
+      break;
+    case AF_INET6:
+      {
+	struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *) remote;
+	if (memcmp (&sin6->sin6_addr, &token->remote.sin6.sin6_addr, sizeof (sin6->sin6_addr)) != 0)
+	  goto AddressMismatch;
+	if (token->type == QUICLY_ADDRESS_TOKEN_TYPE_RETRY &&
+	    sin6->sin6_port != token->remote.sin6.sin6_port)
+	  goto AddressMismatch;
+      }
+      break;
+    default:
+      *err_desc = "unknown address type";
+      return 0;
+    }
+
+  *err_desc = 0;
+  token->address_mismatch = 0;
+  return 1;
+
+AddressMismatch:
+  token->address_mismatch = 1;
+  *err_desc = 0;
+  return 1;
+Expired:
+  *err_desc = "token expired";
+  return 0;
+CIDMismatch:
+  *err_desc = "CID mismatch";
+  return 0;
 }
 
 static void
@@ -1823,7 +1875,23 @@ quic_quicly_accept_connection (quic_quicly_rx_packet_ctx_t *pctx)
     }
 
   quicly_ctx = quic_quicly_get_quicly_ctx_from_ctx (ctx);
-  rv = quicly_accept (&conn, quicly_ctx, NULL, &pctx->sa, &pctx->packet, NULL,
+
+  /* Validate address token from incoming packet for 0-RTT support */
+  quicly_address_token_plaintext_t token_plaintext;
+  quicly_address_token_plaintext_t *token_p = NULL;
+  if (pctx->packet.token.len > 0 && qqm->token_ctx.aead_dec)
+    {
+      const char *err_desc = NULL;
+      int token_rv = quicly_decrypt_address_token (qqm->token_ctx.aead_dec, &token_plaintext,
+						   pctx->packet.token.base, pctx->packet.token.len,
+						   0, &err_desc);
+      if (token_rv == 0 && quic_quicly_validate_address_token (
+			     quicly_ctx, &pctx->sa, pctx->packet.cid.src,
+			     pctx->packet.cid.dest.encrypted, &token_plaintext, &err_desc))
+	token_p = &token_plaintext;
+    }
+
+  rv = quicly_accept (&conn, quicly_ctx, NULL, &pctx->sa, &pctx->packet, token_p,
 		      &qqm->next_cid[pctx->thread_index], NULL, NULL);
   if (rv)
     {
@@ -1917,8 +1985,7 @@ quic_quicly_process_one_rx_packet (u64 udp_session_handle, svm_fifo_t *f,
 
   udp_session = session_get_from_handle (udp_session_handle);
   if (quic_quicly_packet_transform_rx (
-	quic_quicly_get_quic_ctx (udp_session->opaque, udp_session->thread_index),
-	pctx))
+	quic_quicly_get_quic_ctx (udp_session->opaque, udp_session->thread_index), pctx))
     {
       QUIC_DBG (0, "packet transform failed");
       return 1;
@@ -2196,6 +2263,7 @@ quic_quicly_engine_init (quic_main_t *qm)
   qm->default_quic_cc = QUIC_CC_RENO;
   qm->max_packets_per_key = DEFAULT_MAX_PACKETS_PER_KEY;
   qqm->session_cache.super.cb = quic_quicly_encrypt_ticket_cb;
+  clib_spinlock_init (&qqm->session_cache.lock);
   qqm->qm = qm;
 
   vec_validate (qqm->next_cid, qm->num_threads - 1);
@@ -2208,7 +2276,39 @@ quic_quicly_engine_init (quic_main_t *qm)
   clib_bihash_init_24_8 (&qqm->conn_accepting_hash,
 			 "quic (quicly engine) accepting connections", 1024,
 			 4 << 20);
+  clib_bihash_init_24_8 (&qqm->session_cache.id_hash, "quic session ticket cache", 64, 128 << 10);
   quic_quicly_crypto_init (qqm);
+
+  /* Generate server-wide token encryption key for 0-RTT address tokens */
+  {
+    u8 token_key[16];
+    u8 token_iv[12];
+    ptls_openssl_random_bytes (token_key, sizeof (token_key));
+    ptls_openssl_random_bytes (token_iv, sizeof (token_iv));
+    qqm->token_ctx.aead_enc =
+      ptls_aead_new_direct (&ptls_openssl_aes128gcm, 1 /* enc */, token_key, token_iv);
+    qqm->token_ctx.aead_dec =
+      ptls_aead_new_direct (&ptls_openssl_aes128gcm, 0 /* dec */, token_key, token_iv);
+    OPENSSL_cleanse (token_key, sizeof (token_key));
+    OPENSSL_cleanse (token_iv, sizeof (token_iv));
+    if (PREDICT_FALSE (!qqm->token_ctx.aead_enc || !qqm->token_ctx.aead_dec))
+      {
+	if (qqm->token_ctx.aead_enc)
+	  {
+	    ptls_aead_free (qqm->token_ctx.aead_enc);
+	    qqm->token_ctx.aead_enc = 0;
+	  }
+	if (qqm->token_ctx.aead_dec)
+	  {
+	    ptls_aead_free (qqm->token_ctx.aead_dec);
+	    qqm->token_ctx.aead_dec = 0;
+	  }
+	qqm->token_ctx.super.cb = 0;
+	clib_warning ("failed to create token AEAD contexts, 0-RTT disabled");
+      }
+    else
+      qqm->token_ctx.super.cb = quic_quicly_generate_resumption_token_cb;
+  }
 
   /* TODO: Review comment from Florin
    * Should we move this to quic timers and have quic framework call it?
@@ -2413,6 +2513,122 @@ quic_quicly_ctx_attribute (quic_ctx_t *ctx, u8 is_get, transport_endpt_attr_t *a
     }
 }
 
+/* --- Hysteria2 Brutal congestion control --- */
+
+typedef struct
+{
+  u64 target_rate; /* negotiated bytes/sec */
+  u64 bytes_lost;  /* bytes lost in current window */
+  u64 bytes_sent;  /* bytes sent in current window */
+} brutal_cc_state_t;
+
+STATIC_ASSERT (sizeof (brutal_cc_state_t) <= sizeof (((quicly_cc_t *) 0)->state.cubic),
+	       "brutal_cc_state must fit in quicly_cc_t state union");
+
+static __thread u64 quic_brutal_pending_rate;
+static quicly_cc_type_t quicly_cc_type_brutal;
+
+static void
+brutal_cc_on_acked (quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes,
+		    uint64_t largest_acked, uint32_t inflight, int cc_limited, uint64_t next_pn,
+		    int64_t now, uint32_t max_udp_payload_size)
+{
+  brutal_cc_state_t *bs = (brutal_cc_state_t *) &cc->state.cubic;
+  uint32_t rtt_ms = loss->rtt.smoothed ? loss->rtt.smoothed : 100;
+  double loss_rate = 0.0;
+
+  /* Compute loss rate from accumulated byte counters */
+  if (bs->bytes_sent > 1000)
+    {
+      loss_rate = (double) bs->bytes_lost / (double) bs->bytes_sent;
+      /* Reset window for next sample */
+      bs->bytes_lost = 0;
+      bs->bytes_sent = 0;
+    }
+
+  /* Clamp loss rate: never amplify more than 10x */
+  if (loss_rate > 0.9)
+    loss_rate = 0.9;
+
+  /* cwnd = target_rate * rtt_sec / (1 - loss_rate) */
+  uint64_t cwnd64 = ((uint64_t) bs->target_rate * rtt_ms) / 1000;
+  if (loss_rate > 0.01)
+    cwnd64 = (uint64_t) ((double) cwnd64 / (1.0 - loss_rate));
+
+  uint32_t min_cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
+  cc->cwnd = cwnd64 > UINT32_MAX ? UINT32_MAX : (uint32_t) cwnd64;
+  if (cc->cwnd < min_cwnd)
+    cc->cwnd = min_cwnd;
+  if (cc->cwnd > cc->cwnd_maximum)
+    cc->cwnd_maximum = cc->cwnd;
+  cc->ssthresh = UINT32_MAX;
+}
+
+static void
+brutal_cc_on_lost (quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn,
+		   uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size)
+{
+  brutal_cc_state_t *bs = (brutal_cc_state_t *) &cc->state.cubic;
+  /* Track lost bytes for rate compensation; do NOT reduce cwnd */
+  bs->bytes_lost += bytes;
+  quicly_cc__update_ecn_episodes (cc, bytes, lost_pn);
+}
+
+static void
+brutal_cc_on_persistent_congestion (quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now)
+{
+  /* Ignore persistent congestion -- Brutal keeps sending */
+}
+
+static void
+brutal_cc_on_sent (quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now)
+{
+  brutal_cc_state_t *bs = (brutal_cc_state_t *) &cc->state.cubic;
+  bs->bytes_sent += bytes;
+}
+
+static int
+brutal_cc_switch (quicly_cc_t *cc)
+{
+  brutal_cc_state_t *bs = (brutal_cc_state_t *) &cc->state.cubic;
+  cc->type = &quicly_cc_type_brutal;
+  bs->target_rate = quic_brutal_pending_rate;
+  bs->bytes_lost = 0;
+  bs->bytes_sent = 0;
+  cc->ssthresh = UINT32_MAX;
+  /* Initial cwnd based on a conservative 100ms RTT estimate */
+  uint64_t init_cwnd = bs->target_rate / 10;
+  cc->cwnd =
+    init_cwnd > UINT32_MAX ? UINT32_MAX : (uint32_t) clib_max (init_cwnd, cc->cwnd_initial);
+  if (cc->cwnd > cc->cwnd_maximum)
+    cc->cwnd_maximum = cc->cwnd;
+  return 1;
+}
+
+static void
+brutal_cc_jumpstart (quicly_cc_t *cc, uint32_t cwnd, uint64_t next_pn)
+{
+  /* No-op for Brutal */
+}
+
+static quicly_cc_type_t quicly_cc_type_brutal = {
+  .name = "brutal",
+  .cc_init = NULL,
+  .cc_on_acked = brutal_cc_on_acked,
+  .cc_on_lost = brutal_cc_on_lost,
+  .cc_on_persistent_congestion = brutal_cc_on_persistent_congestion,
+  .cc_on_sent = brutal_cc_on_sent,
+  .cc_switch = brutal_cc_switch,
+  .cc_jumpstart = brutal_cc_jumpstart,
+};
+
+static int
+quic_quicly_set_cc_brutal (void *conn, u64 target_rate_bytes_per_sec)
+{
+  quic_brutal_pending_rate = target_rate_bytes_per_sec;
+  return quicly_set_cc ((quicly_conn_t *) conn, &quicly_cc_type_brutal);
+}
+
 const static quic_engine_vft_t quic_quicly_engine_vft = {
   .engine_init = quic_quicly_engine_init,
   .crypto_context_acquire_listen = quic_quicly_crypto_context_acquire_listen,
@@ -2439,6 +2655,7 @@ const static quic_engine_vft_t quic_quicly_engine_vft = {
   .proto_on_reset = quic_quicly_on_app_reset,
   .transport_closed = quic_quicly_transport_closed,
   .ctx_attribute = quic_quicly_ctx_attribute,
+  .set_cc_brutal = quic_quicly_set_cc_brutal,
 };
 
 static clib_error_t *

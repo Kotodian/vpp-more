@@ -110,6 +110,9 @@ extern int quic_quicly_encrypt_ticket_cb (ptls_encrypt_ticket_t *_self,
 					  ptls_t *tls, int is_encrypt,
 					  ptls_buffer_t *dst,
 					  ptls_iovec_t src);
+extern int quic_quicly_generate_resumption_token_cb (quicly_generate_resumption_token_t *_self,
+						     quicly_conn_t *conn, ptls_buffer_t *buf,
+						     quicly_address_token_plaintext_t *token);
 extern void
 quic_quicly_crypto_decrypt_packet (quic_ctx_t *qctx,
 				   quic_quicly_rx_packet_ctx_t *pctx);

@@ -32,7 +32,7 @@ typedef struct quic_quicly_rx_packet_ctx_
 #define _(type, name) type name;
   foreach_quic_rx_pkt_ctx_field
 #undef _
-  quicly_decoded_packet_t packet;
+    quicly_decoded_packet_t packet;
   u8 data[QUIC_MAX_PACKET_SIZE + QUIC_PACKET_TRANSFORM_MAX_EXTRA];
   union
   {
@@ -43,13 +43,34 @@ typedef struct quic_quicly_rx_packet_ctx_
   session_dgram_hdr_t ph;
 } quic_quicly_rx_packet_ctx_t;
 
-/* single-entry session cache */
+#define QUIC_SESSION_CACHE_MAX_ENTRIES 4096
+
+typedef struct quic_session_cache_entry_
+{
+  u8 id[32];
+  u8 *data;
+  u32 data_len;
+} quic_session_cache_entry_t;
+
+/* Multi-entry session ticket cache for TLS resumption / 0-RTT */
 typedef struct quic_quicly_session_cache_
 {
   ptls_encrypt_ticket_t super;
-  uint8_t id[32];
-  ptls_iovec_t data;
+  quic_session_cache_entry_t *entries; /**< pool of cached tickets */
+  clib_bihash_24_8_t id_hash;	       /**< session_id[0:24] -> pool index */
+  u32 *evict_fifo;		       /**< FIFO ring of pool indices for eviction order */
+  u32 evict_head;		       /**< next index to read from evict_fifo */
+  u32 evict_count;		       /**< number of valid entries in fifo */
+  clib_spinlock_t lock;
 } quic_quicly_session_cache_t;
+
+/* Address token context for 0-RTT resumption tokens (NEW_TOKEN frames) */
+typedef struct quic_quicly_token_ctx_
+{
+  quicly_generate_resumption_token_t super;
+  ptls_aead_context_t *aead_enc; /**< encrypt context for token generation */
+  ptls_aead_context_t *aead_dec; /**< decrypt context for token validation */
+} quic_quicly_token_ctx_t;
 
 typedef struct quic_quicly_main_
 {
@@ -59,6 +80,7 @@ typedef struct quic_quicly_main_
    * conn handle, NOTE: we use only connected UDP for now */
   clib_bihash_24_8_t conn_accepting_hash;
   quic_quicly_session_cache_t session_cache;
+  quic_quicly_token_ctx_t token_ctx;
   quicly_cid_plaintext_t *next_cid;
   quic_quicly_rx_packet_ctx_t **rx_packets;
   struct iovec **tx_packets;

@@ -551,8 +551,7 @@ quic_udp_session_accepted_callback (session_t * udp_session)
   ctx->enable_datagrams = lctx->enable_datagrams;
   ctx->packet_transform_password_len = lctx->packet_transform_password_len;
   if (lctx->packet_transform_password_len)
-    clib_memcpy (ctx->packet_transform_password,
-		 lctx->packet_transform_password,
+    clib_memcpy (ctx->packet_transform_password, lctx->packet_transform_password,
 		 lctx->packet_transform_password_len);
   quic_eng_crypto_context_acquire_accept (ctx);
   udp_session->opaque = ctx_index;
@@ -596,12 +595,10 @@ quic_session_get_ctx_if_valid (session_handle_t quic_session_handle)
 
   quic_session = session_get_from_handle_if_valid (quic_session_handle);
   if (!quic_session ||
-      session_type_transport_proto (quic_session->session_type) !=
-	TRANSPORT_PROTO_QUIC)
+      session_type_transport_proto (quic_session->session_type) != TRANSPORT_PROTO_QUIC)
     return 0;
 
-  ctx =
-    quic_ctx_get (quic_session->connection_index, quic_session->thread_index);
+  ctx = quic_ctx_get (quic_session->connection_index, quic_session->thread_index);
   if (!ctx || quic_ctx_is_stream (ctx))
     return 0;
   return ctx;
@@ -626,10 +623,8 @@ quic_datagram_send_rpc (void *rpc_args)
 }
 
 __clib_export int
-quic_custom_datagram_bind (session_handle_t quic_session_handle,
-			   quic_datagram_rx_fn_t *rx_fn,
-			   quic_datagram_closed_fn_t *closed_fn,
-			   void *opaque)
+quic_custom_datagram_bind (session_handle_t quic_session_handle, quic_datagram_rx_fn_t *rx_fn,
+			   quic_datagram_closed_fn_t *closed_fn, void *opaque)
 {
   quic_ctx_t *ctx = quic_session_get_ctx_if_valid (quic_session_handle);
 
@@ -656,8 +651,7 @@ quic_custom_datagram_unbind (session_handle_t quic_session_handle)
 }
 
 __clib_export int
-quic_custom_datagram_send (session_handle_t quic_session_handle,
-			   const u8 *data, u32 data_len)
+quic_custom_datagram_send (session_handle_t quic_session_handle, const u8 *data, u32 data_len)
 {
   clib_thread_index_t thread_index;
   quic_datagram_send_rpc_args_t *args;
@@ -680,9 +674,8 @@ quic_custom_datagram_send (session_handle_t quic_session_handle,
 }
 
 __clib_export int
-quic_custom_stream_bind (session_handle_t quic_session_handle,
-			 quic_stream_accept_fn_t *accept_fn, void *opaque,
-			 u32 app_wrk_index)
+quic_custom_stream_bind (session_handle_t quic_session_handle, quic_stream_accept_fn_t *accept_fn,
+			 void *opaque, u32 app_wrk_index)
 {
   quic_ctx_t *ctx = quic_session_get_ctx_if_valid (quic_session_handle);
 
@@ -706,6 +699,46 @@ quic_custom_stream_unbind (session_handle_t quic_session_handle)
   ctx->stream_accept_fn = 0;
   ctx->stream_accept_opaque = 0;
   ctx->stream_custom_app_wrk_id = 0;
+}
+
+typedef struct
+{
+  session_handle_t quic_session_handle;
+  u64 target_rate;
+} quic_cc_brutal_rpc_args_t;
+
+static void
+quic_cc_brutal_set_rpc (void *rpc_args)
+{
+  quic_cc_brutal_rpc_args_t *args = rpc_args;
+  quic_ctx_t *ctx = quic_session_get_ctx_if_valid (args->quic_session_handle);
+
+  if (ctx && ctx->conn)
+    quic_eng_set_cc_brutal (ctx->conn, args->target_rate);
+  clib_mem_free (args);
+}
+
+__clib_export int
+quic_custom_cc_brutal_set (session_handle_t quic_session_handle, u64 target_rate_bytes_per_sec)
+{
+  clib_thread_index_t thread_index;
+  quic_ctx_t *ctx;
+
+  ctx = quic_session_get_ctx_if_valid (quic_session_handle);
+  if (!ctx || !ctx->conn)
+    return SESSION_E_INVALID;
+
+  thread_index = session_thread_from_handle (quic_session_handle);
+  if (thread_index == vlib_get_thread_index ())
+    return quic_eng_set_cc_brutal (ctx->conn, target_rate_bytes_per_sec);
+
+  quic_cc_brutal_rpc_args_t *args = clib_mem_alloc (sizeof (*args));
+  if (PREDICT_FALSE (!args))
+    return SESSION_E_ALLOC;
+  args->quic_session_handle = quic_session_handle;
+  args->target_rate = target_rate_bytes_per_sec;
+  session_send_rpc_evt_to_thread (thread_index, quic_cc_brutal_set_rpc, args);
+  return 0;
 }
 
 static int
@@ -821,8 +854,7 @@ quic_session_attribute (u32 ctx_index, clib_thread_index_t thread_index,
 	  quic_ctx_t *qctx;
 	  session_t *qsession;
 
-	  qctx =
-	    quic_ctx_get (ctx->quic_connection_ctx_id, ctx->c_thread_index);
+	  qctx = quic_ctx_get (ctx->quic_connection_ctx_id, ctx->c_thread_index);
 	  if (qctx->c_s_index == QUIC_SESSION_INVALID)
 	    return -1;
 	  qsession = session_get (qctx->c_s_index, qctx->c_thread_index);
