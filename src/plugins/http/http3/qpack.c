@@ -1102,9 +1102,17 @@ static const http3_error_t hpack_error_to_http3_error[] = {
   [HPACK_ERROR_UNKNOWN] = HTTP3_ERROR_INTERNAL_ERROR,
 };
 
-#define encode_static_entry(_index)                                           \
-  vec_add2 (dst, a, 1);                                                       \
-  *a++ = 0xC0 | _index;
+#define encode_static_entry(_index)                                                                \
+  do                                                                                               \
+    {                                                                                              \
+      u32 _orig = vec_len (dst);                                                                   \
+      u8 *_s, *_e;                                                                                 \
+      vec_add2 (dst, _s, 1 + HPACK_ENCODED_INT_MAX_LEN);                                           \
+      *_s = 0xC0;                                                                                  \
+      _e = hpack_encode_int (_s, (_index), 6);                                                     \
+      vec_set_len (dst, _orig + (_e - _s));                                                        \
+    }                                                                                              \
+  while (0)
 
 static u8 *
 qpack_encode_status_code (u8 *dst, http_status_code_t sc)
@@ -1200,8 +1208,6 @@ qpack_encode_content_len (u8 *dst, u64 content_len)
 static u8 *
 qpack_encode_method (u8 *dst, http_req_method_t method)
 {
-  u8 *a;
-
   switch (method)
     {
     case HTTP_REQ_CONNECT:
@@ -1226,8 +1232,6 @@ qpack_encode_method (u8 *dst, http_req_method_t method)
 static u8 *
 qpack_encode_scheme (u8 *dst, http_url_scheme_t scheme)
 {
-  u8 *a;
-
   switch (scheme)
     {
     case HTTP_URL_SCHEME_HTTP:
