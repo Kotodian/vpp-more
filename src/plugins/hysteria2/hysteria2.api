@@ -8,7 +8,9 @@ autoreply define hysteria2_server_add_del
   u32 ckpair_index;
   u32 table_id;
   u32 idle_timeout;
+  u64 max_tx_rate;
   u8 uri[256];
   u8 auth_secret[128];
   u8 salamander_password[128];
+  u8 masq_url[256];
 };

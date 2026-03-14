@@ -178,67 +178,70 @@ typedef enum http_content_type_
 #undef _
 } http_content_type_t;
 
-#define foreach_http_status_code                                              \
-  _ (100, CONTINUE, "100 Continue")                                           \
-  _ (101, SWITCHING_PROTOCOLS, "101 Switching Protocols")                     \
-  _ (102, PROCESSING, "102 Processing")                                       \
-  _ (103, EARLY_HINTS, "103 Early Hints")                                     \
-  _ (200, OK, "200 OK")                                                       \
-  _ (201, CREATED, "201 Created")                                             \
-  _ (202, ACCEPTED, "202 Accepted")                                           \
-  _ (203, NON_UTHORITATIVE_INFORMATION, "203 Non-Authoritative Information")  \
-  _ (204, NO_CONTENT, "204 No Content")                                       \
-  _ (205, RESET_CONTENT, "205 Reset Content")                                 \
-  _ (206, PARTIAL_CONTENT, "206 Partial Content")                             \
-  _ (233, HY_OK, "233 HyOK") /* hysteria2: non-IANA status */                  \
-  _ (300, MULTIPLE_CHOICES, "300 Multiple Choices")                           \
-  _ (301, MOVED, "301 Moved Permanently")                                     \
-  _ (302, FOUND, "302 Found")                                                 \
-  _ (303, SEE_OTHER, "303 See Other")                                         \
-  _ (304, NOT_MODIFIED, "304 Not Modified")                                   \
-  _ (305, USE_PROXY, "305 Use Proxy")                                         \
-  _ (307, TEMPORARY_REDIRECT, "307 Temporary Redirect")                       \
-  _ (308, PERMANENT_REDIRECT, "308 Permanent Redirect")                       \
-  _ (400, BAD_REQUEST, "400 Bad Request")                                     \
-  _ (401, UNAUTHORIZED, "401 Unauthorized")                                   \
-  _ (402, PAYMENT_REQUIRED, "402 Payment Required")                           \
-  _ (403, FORBIDDEN, "403 Forbidden")                                         \
-  _ (404, NOT_FOUND, "404 Not Found")                                         \
-  _ (405, METHOD_NOT_ALLOWED, "405 Method Not Allowed")                       \
-  _ (406, NOT_ACCEPTABLE, "406 Not Acceptable")                               \
-  _ (407, PROXY_AUTHENTICATION_REQUIRED, "407 Proxy Authentication Required") \
-  _ (408, REQUEST_TIMEOUT, "408 Request Timeout")                             \
-  _ (409, CONFLICT, "409 Conflict")                                           \
-  _ (410, GONE, "410 Gone")                                                   \
-  _ (411, LENGTH_REQUIRED, "411 Length Required")                             \
-  _ (412, PRECONDITION_FAILED, "412 Precondition Failed")                     \
-  _ (413, CONTENT_TOO_LARGE, "413 Content Too Large")                         \
-  _ (414, URI_TOO_LONG, "414 URI Too Long")                                   \
-  _ (415, UNSUPPORTED_MEDIA_TYPE, "415 Unsupported Media Type")               \
-  _ (416, RANGE_NOT_SATISFIABLE, "416 Range Not Satisfiable")                 \
-  _ (417, EXPECTATION_FAILED, "417 Expectation Failed")                       \
-  _ (421, MISDIRECTED_REQUEST, "421 Misdirected Request")                     \
-  _ (422, UNPROCESSABLE_CONTENT, "422 Unprocessable_Content")                 \
-  _ (423, LOCKED, "423 Locked")                                               \
-  _ (424, FAILED_DEPENDENCY, "424 Failed Dependency")                         \
-  _ (425, TOO_EARLY, "425 Too Early")                                         \
-  _ (426, UPGRADE_REQUIRED, "426 Upgrade Required")                           \
-  _ (428, PRECONDITION_REQUIRED, "428 Precondition Required")                 \
-  _ (429, TOO_MANY_REQUESTS, "429 Too Many Requests")                         \
-  _ (431, REQUEST_HEADER_FIELDS_TOO_LARGE,                                    \
-     "431 Request Header Fields Too Large")                                   \
-  _ (451, UNAVAILABLE_FOR_LEGAL_REASONS, "451 Unavailable For Legal Reasons") \
-  _ (500, INTERNAL_ERROR, "500 Internal Server Error")                        \
-  _ (501, NOT_IMPLEMENTED, "501 Not Implemented")                             \
-  _ (502, BAD_GATEWAY, "502 Bad Gateway")                                     \
-  _ (503, SERVICE_UNAVAILABLE, "503 Service Unavailable")                     \
-  _ (504, GATEWAY_TIMEOUT, "504 Gateway Timeout")                             \
-  _ (505, HTTP_VERSION_NOT_SUPPORTED, "505 HTTP Version Not Supported")       \
-  _ (506, VARIANT_ALSO_NEGOTIATES, "506 Variant Also Negotiates")             \
-  _ (507, INSUFFICIENT_STORAGE, "507 Insufficient Storage")                   \
-  _ (508, LOOP_DETECTED, "508 Loop Detected")                                 \
-  _ (511, NETWORK_AUTHENTICATION_REQUIRED,                                    \
-     "511 Network Authentication Required")
+#define foreach_http_status_code                                                                   \
+  _ (100, CONTINUE, "100 Continue")                                                                \
+  _ (101, SWITCHING_PROTOCOLS, "101 Switching Protocols")                                          \
+  _ (102, PROCESSING, "102 Processing")                                                            \
+  _ (103, EARLY_HINTS, "103 Early Hints")                                                          \
+  _ (200, OK, "200 OK")                                                                            \
+  _ (201, CREATED, "201 Created")                                                                  \
+  _ (202, ACCEPTED, "202 Accepted")                                                                \
+  _ (203, NON_UTHORITATIVE_INFORMATION, "203 Non-Authoritative Information")                       \
+  _ (204, NO_CONTENT, "204 No Content")                                                            \
+  _ (205, RESET_CONTENT, "205 Reset Content")                                                      \
+  _ (206, PARTIAL_CONTENT, "206 Partial Content")                                                  \
+  _ (207, MULTI_STATUS, "207 Multi-Status")                                                        \
+  _ (208, ALREADY_REPORTED, "208 Already Reported")                                                \
+  _ (226, IM_USED, "226 IM Used")                                                                  \
+  _ (233, HY_OK, "233 HyOK") /* hysteria2: non-IANA status */                                      \
+  _ (300, MULTIPLE_CHOICES, "300 Multiple Choices")                                                \
+  _ (301, MOVED, "301 Moved Permanently")                                                          \
+  _ (302, FOUND, "302 Found")                                                                      \
+  _ (303, SEE_OTHER, "303 See Other")                                                              \
+  _ (304, NOT_MODIFIED, "304 Not Modified")                                                        \
+  _ (305, USE_PROXY, "305 Use Proxy")                                                              \
+  _ (307, TEMPORARY_REDIRECT, "307 Temporary Redirect")                                            \
+  _ (308, PERMANENT_REDIRECT, "308 Permanent Redirect")                                            \
+  _ (400, BAD_REQUEST, "400 Bad Request")                                                          \
+  _ (401, UNAUTHORIZED, "401 Unauthorized")                                                        \
+  _ (402, PAYMENT_REQUIRED, "402 Payment Required")                                                \
+  _ (403, FORBIDDEN, "403 Forbidden")                                                              \
+  _ (404, NOT_FOUND, "404 Not Found")                                                              \
+  _ (405, METHOD_NOT_ALLOWED, "405 Method Not Allowed")                                            \
+  _ (406, NOT_ACCEPTABLE, "406 Not Acceptable")                                                    \
+  _ (407, PROXY_AUTHENTICATION_REQUIRED, "407 Proxy Authentication Required")                      \
+  _ (408, REQUEST_TIMEOUT, "408 Request Timeout")                                                  \
+  _ (409, CONFLICT, "409 Conflict")                                                                \
+  _ (410, GONE, "410 Gone")                                                                        \
+  _ (411, LENGTH_REQUIRED, "411 Length Required")                                                  \
+  _ (412, PRECONDITION_FAILED, "412 Precondition Failed")                                          \
+  _ (413, CONTENT_TOO_LARGE, "413 Content Too Large")                                              \
+  _ (414, URI_TOO_LONG, "414 URI Too Long")                                                        \
+  _ (415, UNSUPPORTED_MEDIA_TYPE, "415 Unsupported Media Type")                                    \
+  _ (416, RANGE_NOT_SATISFIABLE, "416 Range Not Satisfiable")                                      \
+  _ (417, EXPECTATION_FAILED, "417 Expectation Failed")                                            \
+  _ (418, IM_A_TEAPOT, "418 I'm a teapot")                                                         \
+  _ (421, MISDIRECTED_REQUEST, "421 Misdirected Request")                                          \
+  _ (422, UNPROCESSABLE_CONTENT, "422 Unprocessable_Content")                                      \
+  _ (423, LOCKED, "423 Locked")                                                                    \
+  _ (424, FAILED_DEPENDENCY, "424 Failed Dependency")                                              \
+  _ (425, TOO_EARLY, "425 Too Early")                                                              \
+  _ (426, UPGRADE_REQUIRED, "426 Upgrade Required")                                                \
+  _ (428, PRECONDITION_REQUIRED, "428 Precondition Required")                                      \
+  _ (429, TOO_MANY_REQUESTS, "429 Too Many Requests")                                              \
+  _ (431, REQUEST_HEADER_FIELDS_TOO_LARGE, "431 Request Header Fields Too Large")                  \
+  _ (451, UNAVAILABLE_FOR_LEGAL_REASONS, "451 Unavailable For Legal Reasons")                      \
+  _ (500, INTERNAL_ERROR, "500 Internal Server Error")                                             \
+  _ (501, NOT_IMPLEMENTED, "501 Not Implemented")                                                  \
+  _ (502, BAD_GATEWAY, "502 Bad Gateway")                                                          \
+  _ (503, SERVICE_UNAVAILABLE, "503 Service Unavailable")                                          \
+  _ (504, GATEWAY_TIMEOUT, "504 Gateway Timeout")                                                  \
+  _ (505, HTTP_VERSION_NOT_SUPPORTED, "505 HTTP Version Not Supported")                            \
+  _ (506, VARIANT_ALSO_NEGOTIATES, "506 Variant Also Negotiates")                                  \
+  _ (507, INSUFFICIENT_STORAGE, "507 Insufficient Storage")                                        \
+  _ (508, LOOP_DETECTED, "508 Loop Detected")                                                      \
+  _ (510, NOT_EXTENDED, "510 Not Extended")                                                        \
+  _ (511, NETWORK_AUTHENTICATION_REQUIRED, "511 Network Authentication Required")
 
 typedef enum http_status_code_
 {

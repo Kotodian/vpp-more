@@ -1058,11 +1058,9 @@ http3_req_state_wait_transport_method (http_conn_t *stream,
 	}
       if (sctx->base.body_len > 0)
 	{
-	  if (stream->state == HTTP_CONN_STATE_HALF_CLOSED &&
-	      !http_io_ts_max_read (stream))
+	  if (stream->state == HTTP_CONN_STATE_HALF_CLOSED && !http_io_ts_max_read (stream))
 	    {
-	      http3_stream_terminate (stream, sctx,
-				     HTTP3_ERROR_REQUEST_INCOMPLETE);
+	      http3_stream_terminate (stream, sctx, HTTP3_ERROR_REQUEST_INCOMPLETE);
 	      return HTTP_SM_STOP;
 	    }
 	  new_state = HTTP_REQ_STATE_TRANSPORT_IO_MORE_DATA;
