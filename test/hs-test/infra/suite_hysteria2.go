@@ -123,18 +123,28 @@ func (s *Hysteria2Suite) addCertKeyPair() uint32 {
 	return reply.Index
 }
 
-func (s *Hysteria2Suite) StartHy2Client(authSecret string) {
+func (s *Hysteria2Suite) StartHy2Client(authSecret string, opts ...string) {
 	hy2 := s.Containers.Hy2Client
 	AssertNil(hy2.Create())
 
+	serverPort := s.Ports.ServerPort
+	bandwidth := ""
+	if len(opts) > 0 {
+		serverPort = opts[0]
+	}
+	if len(opts) > 1 {
+		bandwidth = opts[1]
+	}
 	settings := struct {
 		ServerAddr string
 		AuthSecret string
 		SocksAddr  string
+		Bandwidth  string
 	}{
-		ServerAddr: s.VppAddr() + ":" + s.Ports.ServerPort,
+		ServerAddr: s.VppAddr() + ":" + serverPort,
 		AuthSecret: authSecret,
 		SocksAddr:  "0.0.0.0:" + s.Ports.SocksPort,
+		Bandwidth:  bandwidth,
 	}
 	hy2.CreateConfigFromTemplate(
 		"/tmp/hy2/config.yaml",

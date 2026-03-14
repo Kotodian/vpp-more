@@ -2,5 +2,9 @@ server: {{.ServerAddr}}
 auth: {{.AuthSecret}}
 tls:
   insecure: true
+{{- if .Bandwidth}}
+bandwidth:
+  down: {{.Bandwidth}}
+{{- end}}
 socks5:
   listen: {{.SocksAddr}}
