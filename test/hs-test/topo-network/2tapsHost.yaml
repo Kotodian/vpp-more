@@ -1,0 +1,20 @@
+---
+extra-config:
+  - configured-by-host: true
+devices:
+  - name: "hstcln"
+    type: "tap"
+    ip4:
+      network: 1
+    host:
+      name: "hstcln"
+      ip4:
+        network: 1
+  - name: "hstsrv"
+    type: "tap"
+    ip4:
+      network: 2
+    host:
+      name: "hstsrv"
+      ip4:
+        network: 2

@@ -21,7 +21,6 @@ import sys
 
 from . import vpp_format
 
-
 #
 # Set log-level in application by doing e.g.:
 # logger = logging.getLogger('vpp_serializer')
@@ -450,8 +449,9 @@ class VPPUnionType(Packer):
         fields = []
         self.packers = collections.OrderedDict()
         for i, f in enumerate(msgdef):
-            if type(f) is dict and "crc" in f:
-                self.crc = f["crc"]
+            if type(f) is dict:
+                if "crc" in f:
+                    self.crc = f["crc"]
                 continue
             f_type, f_name = f
             if f_type not in types:
@@ -566,8 +566,9 @@ class VPPType(Packer):
         self.field_by_name = {}
         size = 0
         for i, f in enumerate(msgdef):
-            if type(f) is dict and "crc" in f:
-                self.crc = f["crc"]
+            if type(f) is dict:
+                if "crc" in f:
+                    self.crc = f["crc"]
                 continue
             f_type, f_name = f[:2]
             self.fields.append(f_name)
