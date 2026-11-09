@@ -201,7 +201,11 @@ main (int argc, char *argv[])
     }
 
   if (perf)
+#ifdef __linux__
     err = test_perf (tm);
+#else
+    err = clib_error_return (0, "perf requires Linux performance counters");
+#endif
   else
     err = test_funct (tm);
 

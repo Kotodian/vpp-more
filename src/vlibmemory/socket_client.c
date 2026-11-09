@@ -271,7 +271,12 @@ vl_sock_api_recv_fd_msg_internal (socket_client_main_t * scm, int fds[],
 {
   char msgbuf[16];
   char ctl[CMSG_SPACE (sizeof (int) * n_fds)
-	   + CMSG_SPACE (sizeof (struct ucred))];
+#ifdef __linux__
+	   + CMSG_SPACE (sizeof (struct ucred))
+#elif defined(__FreeBSD__)
+	   + CMSG_SPACE (sizeof (struct cmsgcred))
+#endif
+  ];
   struct msghdr mh = { 0 };
   struct iovec iov[1];
   ssize_t size = 0;
@@ -335,8 +340,9 @@ vl_sock_api_recv_fd_msg_internal (socket_client_main_t * scm, int fds[],
 	      gid = cr->cmcred_gid;
 	      pid = cr->cmcred_pid;
 	    }
-#endif /* __linux__ */
-	  else if (cmsg->cmsg_type == SCM_RIGHTS)
+	  else
+#endif /* __linux__ || __FreeBSD__ */
+	  if (cmsg->cmsg_type == SCM_RIGHTS)
 	    {
 	      clib_memcpy_fast (fds, CMSG_DATA (cmsg), sizeof (int) * n_fds);
 	    }

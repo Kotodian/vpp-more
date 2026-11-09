@@ -252,6 +252,12 @@ os_get_online_cpu_core_bitmap ()
   return clib_sysfs_read_bitmap ("/sys/devices/system/cpu/online");
 #elif defined(__FreeBSD__)
   return os_get_cpu_affinity_bitmap (0);
+#elif defined(__APPLE__)
+  long n_cpus = sysconf (_SC_NPROCESSORS_ONLN);
+  clib_bitmap_t *cpus = 0;
+  if (n_cpus > 0)
+    cpus = clib_bitmap_set_region (cpus, 0, 1, n_cpus);
+  return cpus;
 #else
   return 0;
 #endif

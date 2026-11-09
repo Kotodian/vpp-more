@@ -244,6 +244,9 @@ sigaction_handler (int signum, siginfo_t * i, void *notused)
   action >>= 28;
   opaque = (u32) (uword) i->si_ptr;
   opaque &= ~(0xF0000000);
+#elif defined(__APPLE__)
+  action = (u32) (uword) i->si_value.sival_ptr >> 28;
+  opaque = (u32) (uword) i->si_value.sival_ptr & 0x0fffffff;
 #elif __FreeBSD__
   action = i->si_code;
   opaque = 0;

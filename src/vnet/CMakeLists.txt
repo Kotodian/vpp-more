@@ -1004,9 +1004,11 @@ list(APPEND VNET_API_FILES feature/feature.api)
 if("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux")
 list(APPEND VNET_SOURCES
   unix/gdb_funcs.c
-  unix/tuntap.c
 )
+endif()
 
+if(CMAKE_SYSTEM_NAME MATCHES "Linux|Darwin")
+list(APPEND VNET_SOURCES unix/tuntap.c)
 list(APPEND VNET_HEADERS
   unix/tuntap.h
 )
@@ -1451,6 +1453,9 @@ add_vpp_library (vatclient
   SOURCES ip/ip_types_api.c
   DEPENDS api_headers
 )
+if(APPLE)
+  target_link_libraries(vatclient vnet vppinfra)
+endif()
 
 add_vat_test_library(vnet
   interface_test.c

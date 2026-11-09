@@ -5,9 +5,20 @@
 #include <errno.h>
 #include <pthread.h>
 #include <sched.h>
+#include <signal.h>
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
+/* Darwin cannot deliver the sigval payload required by svmdb notifications. */
+static inline int
+sigqueue (pid_t pid, int sig, const union sigval value)
+{
+  (void) pid;
+  (void) sig;
+  (void) value;
+  errno = ENOTSUP;
+  return -1;
+}
 #define PTHREAD_MUTEX_ROBUST 1
 static inline int
 pthread_mutexattr_setrobust (pthread_mutexattr_t *attr, int robust)

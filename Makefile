@@ -62,8 +62,9 @@ GDB_ARGS= -ex "handle SIGUSR1 noprint nostop"
 #
 # OS Detection
 #
-# We allow Darwin (MacOS) for docs generation; VPP build will still fail.
-ifneq ($(shell uname),Darwin)
+ifeq ($(shell uname),Darwin)
+OS_ID = darwin
+else
 OS_ID        = $(shell grep '^ID=' /etc/os-release | cut -f2- -d= | sed -e 's/\"//g')
 ifeq ($(OS_ID),rhel)
 OS_VERSION_ID= $(shell grep '^VERSION_ID=' /etc/os-release | cut -f2- -d= | sed -e 's/\"//g' | sed -e 's/\..*//')
@@ -333,6 +334,7 @@ help:
 	@echo " wipe-release         - wipe all products of release build "
 	@echo " build                - build debug binaries"
 	@echo " build-release        - build release binaries"
+	@echo " release              - alias for build-release"
 	@echo " build-coverity       - build coverity artifacts"
 	@echo " build-gcov 		 - build gcov vpp only"
 	@echo " rebuild              - wipe and build debug binaries"
@@ -413,7 +415,9 @@ $(BR)/.deps.ok:
 ifeq ($(findstring y,$(UNATTENDED)),y)
 	$(MAKE) install-dep
 endif
-ifeq ($(filter ubuntu debian linuxmint,$(OS_ID)),$(OS_ID))
+ifeq ($(OS_ID),darwin)
+	@bash extras/scripts/build_native_macos.sh deps
+else ifeq ($(filter ubuntu debian linuxmint,$(OS_ID)),$(OS_ID))
 	@MISSING=$$(apt-get install -y -qq -s $(DEB_DEPENDS) | grep "^Inst ") ; \
 	if [ -n "$$MISSING" ] ; then \
 	  printf "\nPlease install missing packages: \n$$MISSING\n" ; \
@@ -441,7 +445,9 @@ bootstrap:
 
 .PHONY: install-dep
 install-dep:
-ifeq ($(filter ubuntu debian linuxmint,$(OS_ID)),$(OS_ID))
+ifeq ($(OS_ID),darwin)
+	@bash extras/scripts/build_native_macos.sh deps
+else ifeq ($(filter ubuntu debian linuxmint,$(OS_ID)),$(OS_ID))
 	@sudo -E apt-get update
 	@sudo -E apt-get $(APT_ARGS) $(CONFIRM) $(FORCE) install $(DEB_DEPENDS)
 else ifneq ("$(wildcard /etc/redhat-release)","")
@@ -494,7 +500,9 @@ else ifeq ($(OS_ID), freebsd)
 else
 	$(error "This option currently works only on Ubuntu, Debian, RHEL, CentOS, Kylin, openSUSE-leap or FreeBSD systems")
 endif
+ifneq ($(OS_ID),darwin)
 	git config commit.template .git_commit_template.txt
+endif
 
 .PHONY: install-deps
 install-deps: install-dep
@@ -537,7 +545,11 @@ dist:
 
 .PHONY: build
 build: $(BR)/.deps.ok
+ifeq ($(OS_ID),darwin)
+	@CC="$(CC)" bash extras/scripts/build_native_macos.sh Debug $(VPP_EXTRA_CMAKE_ARGS)
+else
 	$(call make,$(PLATFORM)_debug,$(addsuffix -install,$(TARGETS)))
+endif
 
 .PHONY: wipedist
 wipedist:
@@ -553,7 +565,14 @@ rebuild: wipe build
 
 .PHONY: build-release
 build-release: $(BR)/.deps.ok
+ifeq ($(OS_ID),darwin)
+	@CC="$(CC)" bash extras/scripts/build_native_macos.sh Release $(VPP_EXTRA_CMAKE_ARGS)
+else
 	$(call make,$(PLATFORM),$(addsuffix -install,$(TARGETS)))
+endif
+
+.PHONY: release
+release: build-release
 
 .PHONY: build-gcov
 build-gcov: $(BR)/.deps.ok

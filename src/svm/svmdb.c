@@ -182,6 +182,10 @@ int
 svmdb_local_add_del_notification (svmdb_client_t * client,
 				  svmdb_notification_args_t * a)
 {
+#ifdef __APPLE__
+  /* macOS has no queued signals carrying the required notification payload. */
+  return -ENOTSUP;
+#endif
   uword *h;
   void *oldheap;
   hash_pair_t *hp;

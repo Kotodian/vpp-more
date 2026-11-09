@@ -195,7 +195,13 @@ stats_socket_accept_ready (clib_file_t *uf)
     }
 
   /* Send the fd across and close */
+#ifdef __APPLE__
+  /* SCM_RIGHTS on a stream socket needs at least one byte of payload. */
+  u8 payload = 0;
+  err = clib_socket_sendmsg (&client, &payload, sizeof (payload), &sm->memfd, 1);
+#else
   err = clib_socket_sendmsg (&client, 0, 0, &sm->memfd, 1);
+#endif
   if (err)
     clib_error_report (err);
   clib_socket_close (&client);
@@ -214,6 +220,9 @@ stats_segment_socket_init (void)
   s->config = (char *) sm->socket_name;
   s->flags = CLIB_SOCKET_F_IS_SERVER | CLIB_SOCKET_F_SEQPACKET |
 	     CLIB_SOCKET_F_ALLOW_GROUP_WRITE | CLIB_SOCKET_F_PASSCRED;
+#ifdef __APPLE__
+  s->flags &= ~CLIB_SOCKET_F_SEQPACKET;
+#endif
 
   if ((error = clib_socket_init (s)))
     return error;

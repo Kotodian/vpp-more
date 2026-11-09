@@ -100,7 +100,7 @@ test_perf_event_disable (test_perf_t *t)
 {
   clib_perfmon_ioctl (t->fd, PERF_EVENT_IOC_DISABLE);
 }
-#elif __FreeBSD__
+#elif defined(__FreeBSD__) || defined(__APPLE__)
 static_always_inline void
 test_perf_event_reset (test_perf_t *t)
 {

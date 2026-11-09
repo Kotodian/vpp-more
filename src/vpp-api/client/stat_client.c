@@ -86,7 +86,12 @@ stat_segment_connect_r (const char *socket_name, stat_client_main_t * sm)
   int sock;
 
   clib_memset (sm, 0, sizeof (*sm));
-  if ((sock = socket (AF_UNIX, SOCK_SEQPACKET, 0)) < 0)
+#ifdef __APPLE__
+  int socket_type = SOCK_STREAM;
+#else
+  int socket_type = SOCK_SEQPACKET;
+#endif
+  if ((sock = socket (AF_UNIX, socket_type, 0)) < 0)
     {
       perror ("Stat client couldn't open socket");
       return -1;

@@ -129,7 +129,7 @@ add_vpp_tool(vpp_prometheus_export
 if(OPENSSL_FOUND)
   add_vpp_tool(vpp_prometheus_push
      SOURCES app/vpp_prometheus_push.c app/dump_metrics.c
-     LINK_LIBRARIES vppapiclient vppinfra svm vlibmemoryclient ssl crypto ${EPOLL_LIB}
+     LINK_LIBRARIES vppapiclient vppinfra svm vlibmemoryclient OpenSSL::SSL OpenSSL::Crypto ${EPOLL_LIB}
      DEPENDS api_headers
   )
 else()

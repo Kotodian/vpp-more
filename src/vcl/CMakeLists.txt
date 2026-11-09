@@ -58,8 +58,8 @@ if (LDP_HAS_GNU_SOURCE)
   add_compile_definitions(HAVE_GNU_SOURCE)
 endif(LDP_HAS_GNU_SOURCE)
 
-if("${CMAKE_SYSTEM_NAME}" STREQUAL "FreeBSD")
-  message("WARNING: vcl_ldpreload isn't supported on FreeBSD - disabled")
+if("${CMAKE_SYSTEM_NAME}" MATCHES "FreeBSD|Darwin")
+  message(STATUS "vcl_ldpreload requires the Linux/glibc socket ABI; building native vppcom only")
 else()
 add_vpp_library(vcl_ldpreload
   SOURCES

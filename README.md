@@ -76,6 +76,19 @@ interest. To see the available targets run:
     make
 
 
+### Quick-start: Native macOS
+
+With Xcode Command Line Tools, CMake, Git and Python 3 installed, run:
+
+    make build
+    make release
+
+The initial build sets up local dependencies under `build-root`. Debug and
+release binaries are installed under `build-root/install-vpp_debug-native/vpp`
+and `build-root/install-vpp-native/vpp`. See the
+[native macOS build guide](docs/developer/build-run-debug/native_macos.rst)
+for prerequisites, options and the current Darwin platform scope.
+
 ### Quick-start: Vagrant
 
 The directory `extras/vagrant` contains a `VagrantFile` and supporting

@@ -101,7 +101,7 @@ list(GET VPP_LIB_VERSION 0 VPP_LIB_VERSION)
 set(MIN_SUPPORTED_CLANG_C_COMPILER_VERSION 9.0.0)
 set(MIN_SUPPORTED_GNU_C_COMPILER_VERSION 9.0.0)
 
-if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+if(CMAKE_C_COMPILER_ID MATCHES "^(Apple)?Clang$")
   if (CMAKE_C_COMPILER_VERSION VERSION_LESS MIN_SUPPORTED_CLANG_C_COMPILER_VERSION)
     set(COMPILER_TOO_OLD TRUE)
   endif()
@@ -276,7 +276,15 @@ endif()
 ##############################################################################
 option(VPP_SET_RPATH "Set rpath for resulting binaries and libraries." ON)
 if(VPP_SET_RPATH)
-  set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/${VPP_LIBRARY_DIR}")
+  if(APPLE)
+    # Use the same loader-relative paths before and after installation.
+    # This also avoids repeated install_name_tool edits on incremental installs.
+    set(CMAKE_INSTALL_RPATH
+      "@loader_path;@loader_path/../${VPP_LIBRARY_DIR};@loader_path/..")
+    set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
+  else()
+    set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/${VPP_LIBRARY_DIR}")
+  endif()
   # Keep the build-tree rpath $ORIGIN-relative rather than an absolute build
   # path, so binaries still find their libs when the build tree is reached
   # through a different mount path (e.g. an NFS automount prefix).
@@ -397,6 +405,15 @@ elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
   include_directories(${EPOLL_SHIM_INCLUDE_DIR})
   set(EPOLL_LIB epoll-shim::epoll-shim)
   link_libraries(${EPOLL_LIB})
+  # The native install must include the shim used by every VPP library.
+  install(FILES $<TARGET_FILE:epoll-shim::epoll-shim>
+    DESTINATION ${VPP_LIBRARY_DIR} COMPONENT vpp)
+  add_custom_target(darwin_runtime ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:epoll-shim::epoll-shim> ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
+    COMMENT "Copying epoll-shim into the native build runtime"
+    VERBATIM)
   add_compile_options(-Wno-gnu-folding-constant)
   add_compile_options(-Wno-deprecated-declarations)
   add_compile_options(-include ${CMAKE_SOURCE_DIR}/vppinfra/darwin/compat.h)

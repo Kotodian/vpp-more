@@ -17,7 +17,8 @@
  * - "normal interface" mode, where we treat the Linux kernel stack
  * as a peer.
  *
- * By default, we select punt/inject mode.
+ * Linux defaults to punt/inject mode. macOS uses a routed utun interface;
+ * host addresses and routes are configured separately.
  */
 
 #include <fcntl.h>		/* for open */
@@ -28,8 +29,15 @@
 #include <sys/uio.h>		/* for iovec */
 #include <netinet/in.h>
 
+#ifdef __APPLE__
+#include <net/if.h>
+#include <net/if_utun.h>
+#include <sys/kern_control.h>
+#include <sys/sys_domain.h>
+#else
 #include <linux/if_arp.h>
 #include <linux/if_tun.h>
+#endif
 
 #include <vlib/vlib.h>
 #include <vlib/file.h>
@@ -44,12 +52,14 @@
 static vnet_device_class_t tuntap_dev_class;
 static vnet_hw_interface_class_t tuntap_interface_class;
 
+#ifndef __APPLE__
 static void tuntap_punt_frame (vlib_main_t * vm,
 			       vlib_node_runtime_t * node,
 			       vlib_frame_t * frame);
 static void tuntap_nopunt_frame (vlib_main_t * vm,
 				 vlib_node_runtime_t * node,
 				 vlib_frame_t * frame);
+#endif
 
 typedef struct
 {
@@ -79,7 +89,7 @@ typedef struct
   /** per thread variables */
   tuntap_per_thread_t *threads;
 
-  /** File descriptors for /dev/net/tun and provisioning socket. */
+  /** Packet device (/dev/net/tun or utun) and Linux provisioning socket. */
   int dev_net_tun_fd, dev_tap_fd;
 
   /** Create a "tap" [ethernet] encaps device */
@@ -95,7 +105,7 @@ typedef struct
   /** Interface MTU in bytes and # of default sized buffers. */
   u32 mtu_bytes, mtu_buffers;
 
-  /** Linux interface name for tun device. */
+  /** Host interface name for the tun device. */
   char *tun_name;
 
   /** Pool of subinterface addresses */
@@ -113,7 +123,14 @@ typedef struct
 } tuntap_main_t;
 
 static tuntap_main_t tuntap_main = {
+#ifdef __APPLE__
+  .tun_name = "utun",
+#else
   .tun_name = "vnet",
+#endif
+  .dev_net_tun_fd = -1,
+  .dev_tap_fd = -1,
+  .clib_file_index = ~0,
 
   /** Suitable defaults for an Ethernet-like tun/tap device */
   .mtu_bytes = 4096 + 256,
@@ -164,6 +181,24 @@ tuntap_tx (vlib_main_t * vm, vlib_node_runtime_t * node, vlib_frame_t * frame)
       if (tm->threads[thread_index].iovecs)
 	vec_set_len (tm->threads[thread_index].iovecs, 0);
 
+#ifdef __APPLE__
+      u32 af;
+      switch (*(u8 *) vlib_buffer_get_current (b) >> 4)
+	{
+	case 4:
+	  af = htonl (AF_INET);
+	  break;
+	case 6:
+	  af = htonl (AF_INET6);
+	  break;
+	default:
+	  continue;
+	}
+      vec_add2 (tm->threads[thread_index].iovecs, iov, 1);
+      iov->iov_base = &af;
+      iov->iov_len = sizeof (af);
+#endif
+
       /** VLIB buffer chain -> Unix iovec(s). */
       vec_add2 (tm->threads[thread_index].iovecs, iov, 1);
       iov->iov_base = b->data + b->current_data;
@@ -184,8 +219,13 @@ tuntap_tx (vlib_main_t * vm, vlib_node_runtime_t * node, vlib_frame_t * frame)
 	  while (b->flags & VLIB_BUFFER_NEXT_PRESENT);
 	}
 
-      if (writev (tm->dev_net_tun_fd, tm->threads[thread_index].iovecs,
-		  vec_len (tm->threads[thread_index].iovecs)) < l)
+      uword wire_length = l;
+#ifdef __APPLE__
+      wire_length += sizeof (af);
+#endif
+      ssize_t written = writev (tm->dev_net_tun_fd, tm->threads[thread_index].iovecs,
+				vec_len (tm->threads[thread_index].iovecs));
+      if (written < 0 || (uword) written != wire_length)
 	clib_unix_warning ("writev");
 
       n_bytes += l;
@@ -199,9 +239,11 @@ tuntap_tx (vlib_main_t * vm, vlib_node_runtime_t * node, vlib_frame_t * frame)
 
 
   /** The normal interface path flattens the buffer chain */
+#ifndef __APPLE__
   if (tm->have_normal_interface)
     vlib_buffer_free_no_next (vm, buffers, n_packets);
   else
+#endif
     vlib_buffer_free (vm, buffers, n_packets);
 
   return n_packets;
@@ -263,19 +305,26 @@ tuntap_rx (vlib_main_t * vm, vlib_node_runtime_t * node, vlib_frame_t * frame)
     ASSERT (vec_len (tm->threads[thread_index].rx_buffers) >=
 	    tm->mtu_buffers);
 
-    vec_validate (tm->threads[thread_index].iovecs, tm->mtu_buffers - 1);
+    u32 header_iov = 0;
+#ifdef __APPLE__
+    u32 af;
+    header_iov = 1;
+#endif
+    vec_validate (tm->threads[thread_index].iovecs, tm->mtu_buffers + header_iov - 1);
+#ifdef __APPLE__
+    tm->threads[thread_index].iovecs[0] = (struct iovec){ .iov_base = &af, .iov_len = sizeof (af) };
+#endif
     for (i = 0; i < tm->mtu_buffers; i++)
       {
 	b =
 	  vlib_get_buffer (vm,
 			   tm->threads[thread_index].rx_buffers[i_rx - i]);
-	tm->threads[thread_index].iovecs[i].iov_base = b->data;
-	tm->threads[thread_index].iovecs[i].iov_len = buffer_size;
+	tm->threads[thread_index].iovecs[i + header_iov].iov_base = b->data;
+	tm->threads[thread_index].iovecs[i + header_iov].iov_len = buffer_size;
       }
 
     n_bytes_left =
-      readv (tm->dev_net_tun_fd, tm->threads[thread_index].iovecs,
-	     tm->mtu_buffers);
+      readv (tm->dev_net_tun_fd, tm->threads[thread_index].iovecs, tm->mtu_buffers + header_iov);
     n_bytes_in_packet = n_bytes_left;
     if (n_bytes_left <= 0)
       {
@@ -283,6 +332,17 @@ tuntap_rx (vlib_main_t * vm, vlib_node_runtime_t * node, vlib_frame_t * frame)
 	  clib_unix_warning ("readv %d", n_bytes_left);
 	return 0;
       }
+#ifdef __APPLE__
+    if (n_bytes_left <= (word) sizeof (af))
+      return 0;
+    n_bytes_left -= sizeof (af);
+    n_bytes_in_packet = n_bytes_left;
+    af = ntohl (af);
+    b = vlib_get_buffer (vm, tm->threads[thread_index].rx_buffers[i_rx]);
+    if ((af != AF_INET && af != AF_INET6) || (af == AF_INET && (b->data[0] >> 4) != 4) ||
+	(af == AF_INET6 && (b->data[0] >> 4) != 6))
+      return 0;
+#endif
 
     bi = tm->threads[thread_index].rx_buffers[i_rx];
 
@@ -412,6 +472,17 @@ static clib_error_t *
 tuntap_exit (vlib_main_t * vm)
 {
   tuntap_main_t *tm = &tuntap_main;
+#ifdef __APPLE__
+  if (tm->clib_file_index != ~0)
+    {
+      /* clib_file_del owns the close; closing utun destroys the interface. */
+      clib_file_del (&file_main, clib_file_get (&file_main, tm->clib_file_index));
+      tm->clib_file_index = ~0;
+      tm->dev_net_tun_fd = -1;
+      vec_free (tm->tun_name);
+    }
+  return 0;
+#else
   struct ifreq ifr;
   int sfd;
 
@@ -445,6 +516,7 @@ tuntap_exit (vlib_main_t * vm)
     close (sfd);
 
   return 0;
+#endif
 }
 
 VLIB_MAIN_LOOP_EXIT_FUNCTION (tuntap_exit);
@@ -458,6 +530,7 @@ VLIB_MAIN_LOOP_EXIT_FUNCTION (tuntap_exit);
  * @return error - clib_error_t
  *
  */
+#ifndef __APPLE__
 static clib_error_t *
 tuntap_config (vlib_main_t * vm, unformat_input_t * input)
 {
@@ -659,8 +732,147 @@ done:
   return error;
 }
 
+#else
+static clib_error_t *
+tuntap_config (vlib_main_t *vm, unformat_input_t *input)
+{
+  tuntap_main_t *tm = &tuntap_main;
+  struct ctl_info info = {};
+  struct sockaddr_ctl ctl = {
+    .sc_len = sizeof (ctl),
+    .sc_family = AF_SYSTEM,
+    .ss_sysaddr = AF_SYS_CONTROL,
+  };
+  struct ifreq ifr = {};
+  clib_error_t *error = 0;
+  u8 *name = 0;
+  int enabled = 0, provision_fd = -1;
+  u32 unit;
+
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (input, "enable"))
+	enabled = 1;
+      else if (unformat (input, "disable"))
+	enabled = 0;
+      else if (unformat (input, "mtu %u", &tm->mtu_bytes))
+	;
+      else if (unformat (input, "name %s", &name))
+	;
+      else if (unformat (input, "have-normal-interface") || unformat (input, "have-normal"))
+	;
+      else
+	{
+	  error =
+	    clib_error_return (0, "macOS tuntap supports routed utun only: unknown input `%U'",
+			       format_unformat_error, input);
+	  goto done;
+	}
+    }
+  if (!enabled)
+    goto done;
+  if (tm->mtu_bytes < 1280 || tm->mtu_bytes > 65535)
+    {
+      error = clib_error_return (0, "utun MTU must be between 1280 and 65535");
+      goto done;
+    }
+  if (name && strcmp ((char *) name, "utun"))
+    {
+      unformat_input_t name_input;
+      unformat_init_string (&name_input, (char *) name, strlen ((char *) name));
+      int valid = unformat (&name_input, "utun%u", &unit) &&
+		  unformat_check_input (&name_input) == UNFORMAT_END_OF_INPUT && unit != ~0u;
+      unformat_free (&name_input);
+      if (!valid)
+	{
+	  error = clib_error_return (0, "utun name must be utun or utun<N>");
+	  goto done;
+	}
+      ctl.sc_unit = unit + 1;
+    }
+
+  tm->dev_net_tun_fd = socket (PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL);
+  if (tm->dev_net_tun_fd < 0)
+    {
+      error = clib_error_return_unix (0, "utun socket");
+      goto done;
+    }
+  strncpy (info.ctl_name, UTUN_CONTROL_NAME, sizeof (info.ctl_name) - 1);
+  if (ioctl (tm->dev_net_tun_fd, CTLIOCGINFO, &info) < 0)
+    {
+      error = clib_error_return_unix (0, "utun CTLIOCGINFO");
+      goto done;
+    }
+  ctl.sc_id = info.ctl_id;
+  if (connect (tm->dev_net_tun_fd, (struct sockaddr *) &ctl, sizeof (ctl)) < 0)
+    {
+      error = clib_error_return_unix (0, "utun connect");
+      goto done;
+    }
+  socklen_t name_len = sizeof (ifr.ifr_name);
+  if (getsockopt (tm->dev_net_tun_fd, SYSPROTO_CONTROL, UTUN_OPT_IFNAME, ifr.ifr_name, &name_len) <
+      0)
+    {
+      error = clib_error_return_unix (0, "utun interface name");
+      goto done;
+    }
+  if (fcntl (tm->dev_net_tun_fd, F_SETFL, O_NONBLOCK) < 0 ||
+      fcntl (tm->dev_net_tun_fd, F_SETFD, FD_CLOEXEC) < 0)
+    {
+      error = clib_error_return_unix (0, "utun fcntl");
+      goto done;
+    }
+  provision_fd = socket (AF_INET, SOCK_DGRAM, 0);
+  if (provision_fd < 0)
+    {
+      error = clib_error_return_unix (0, "utun provisioning socket");
+      goto done;
+    }
+  ifr.ifr_mtu = tm->mtu_bytes;
+  if (ioctl (provision_fd, SIOCSIFMTU, &ifr) < 0 || ioctl (provision_fd, SIOCGIFFLAGS, &ifr) < 0)
+    {
+      error = clib_error_return_unix (0, "utun MTU/flags");
+      goto done;
+    }
+  ifr.ifr_flags |= IFF_UP;
+  if (ioctl (provision_fd, SIOCSIFFLAGS, &ifr) < 0)
+    {
+      error = clib_error_return_unix (0, "utun interface up");
+      goto done;
+    }
+
+  tm->tun_name = (char *) format (0, "%s%c", ifr.ifr_name, 0);
+  tm->have_normal_interface = 1;
+  tm->mtu_buffers = (tm->mtu_bytes + vlib_buffer_get_default_data_size (vm) - 1) /
+		    vlib_buffer_get_default_data_size (vm);
+  vnet_main_t *vnm = vnet_get_main ();
+  tm->hw_if_index =
+    vnet_register_interface (vnm, tuntap_dev_class.index, 0, tuntap_interface_class.index, 0);
+  tm->sw_if_index = vnet_get_hw_interface (vnm, tm->hw_if_index)->sw_if_index;
+  vnet_hw_interface_set_flags (vnm, tm->hw_if_index, VNET_HW_INTERFACE_FLAG_LINK_UP);
+  vnet_sw_interface_set_mtu (vnm, tm->sw_if_index, tm->mtu_bytes);
+  tm->clib_file_index =
+    clib_file_add (&file_main, &(clib_file_t){
+				 .read_function = tuntap_read_ready,
+				 .file_descriptor = tm->dev_net_tun_fd,
+				 .description = format (0, "vnet tuntap %s", tm->tun_name),
+			       });
+done:
+  if (provision_fd >= 0)
+    close (provision_fd);
+  if (error && tm->dev_net_tun_fd >= 0)
+    {
+      close (tm->dev_net_tun_fd);
+      tm->dev_net_tun_fd = -1;
+    }
+  vec_free (name);
+  return error;
+}
+#endif
+
 VLIB_CONFIG_FUNCTION (tuntap_config, "tuntap");
 
+#ifndef __APPLE__
 /**
  * @brief Add or Del IP4 address to tun/tap interface
  *
@@ -885,6 +1097,8 @@ tuntap_ip6_add_del_interface_address (ip6_main_t * im,
     }
 }
 
+#endif
+
 /**
  * @brief TX the tun/tap frame
  *
@@ -893,6 +1107,7 @@ tuntap_ip6_add_del_interface_address (ip6_main_t * im,
  * @param *frame - vlib_frame_t
  *
  */
+#ifndef __APPLE__
 static void
 tuntap_punt_frame (vlib_main_t * vm,
 		   vlib_node_runtime_t * node, vlib_frame_t * frame)
@@ -918,6 +1133,8 @@ tuntap_nopunt_frame (vlib_main_t * vm,
   vlib_buffer_free (vm, buffers, n_packets);
   vlib_frame_free (vm, frame);
 }
+
+#endif
 
 VNET_HW_INTERFACE_CLASS (tuntap_interface_class,static) = {
   .name = "tuntap",
@@ -985,12 +1202,12 @@ VNET_DEVICE_CLASS (tuntap_dev_class,static) = {
 static clib_error_t *
 tuntap_init (vlib_main_t * vm)
 {
+#ifndef __APPLE__
   ip4_main_t *im4 = &ip4_main;
   ip6_main_t *im6 = &ip6_main;
   ip4_add_del_interface_address_callback_t cb4;
   ip6_add_del_interface_address_callback_t cb6;
   tuntap_main_t *tm = &tuntap_main;
-  vlib_thread_main_t *m = vlib_get_thread_main ();
 
   mhash_init (&tm->subif_mhash, sizeof (u32), sizeof (subif_address_t));
 
@@ -1001,6 +1218,10 @@ tuntap_init (vlib_main_t * vm)
   cb6.function = tuntap_ip6_add_del_interface_address;
   cb6.function_opaque = 0;
   vec_add1 (im6->add_del_interface_address_callbacks, cb6);
+#else
+  tuntap_main_t *tm = &tuntap_main;
+#endif
+  vlib_thread_main_t *m = vlib_get_thread_main ();
   vec_validate_aligned (tm->threads, m->n_vlib_mains - 1,
 			CLIB_CACHE_LINE_BYTES);
 

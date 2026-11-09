@@ -48,7 +48,7 @@ print_log2_histogram_metric (FILE *stream, stat_segment_data_t *res)
 
   for (int thread = 0; thread < n_threads; ++thread)
     {
-      u64 *bins = res->log2_histogram_bins[thread];
+      uint64_t *bins = res->log2_histogram_bins[thread];
       int n_bins = vec_len (bins);
       if (n_bins < 2) // Need at least min_exp + one bin
 	continue;

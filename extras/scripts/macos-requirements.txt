@@ -1,0 +1,5 @@
+# Build-time Python dependencies live in build-root/build-darwin-deps/venv.
+ninja==1.13.2
+ply==3.11
+setuptools==80.9.0
+wheel==0.45.1

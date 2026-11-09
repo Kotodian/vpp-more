@@ -49,7 +49,7 @@ svm_get_root_rp (void)
 u64
 svm_get_global_region_base_va ()
 {
-#if __aarch64__
+#if defined(__aarch64__) && defined(__linux__)
   /* On AArch64 VA space can have different size, from 36 to 48 bits.
      Here we are trying to detect VA bits by parsing /proc/self/maps
      address ranges */
@@ -570,7 +570,7 @@ svm_map_region (svm_map_region_args_t * a)
 
       vec_free (shm_name);
 
-#ifdef __FreeBSD__
+#if defined(__FreeBSD__) || defined(__APPLE__)
       if (ftruncate (svm_fd, a->size) < 0)
 	{
 	  clib_warning ("ftruncate region size");
@@ -591,7 +591,7 @@ svm_map_region (svm_map_region_args_t * a)
 	  close (svm_fd);
 	  return (0);
 	}
-#endif /* __FreeBSD__ */
+#endif /* __FreeBSD__ || __APPLE__ */
 
       rp = mmap (uword_to_pointer (a->baseva, void *), a->size,
 		 PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, svm_fd, 0);

@@ -141,7 +141,7 @@ dump_stats_result (stat_segment_data_t *res)
 	case STAT_DIR_TYPE_HISTOGRAM_LOG2:
 	  for (k = 0; k < vec_len (res[i].log2_histogram_bins); k++)
 	    {
-	      u64 *bins = res[i].log2_histogram_bins[k];
+	      uint64_t *bins = res[i].log2_histogram_bins[k];
 	      int n_bins = vec_len (bins);
 	      if (n_bins < 2) // Need at least min_exp + one bin
 		continue;

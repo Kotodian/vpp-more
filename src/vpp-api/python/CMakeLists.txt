@@ -15,6 +15,12 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(PYTHONINTERP_FOUND ${Python3_Interpreter_FOUND})
 set(PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
 
+if(APPLE)
+  # The native build's venv already provides pinned setuptools and wheel.
+  # Reuse them so incremental installs do not download build tools again.
+  set(VPP_PAPI_BUILD_OPTIONS --no-build-isolation)
+endif()
+
 install(
   CODE "
   execute_process(
@@ -25,6 +31,7 @@ install(
 	--root=\$ENV{DESTDIR}/
 	--prefix=${CMAKE_INSTALL_PREFIX}
 	--no-deps
+        ${VPP_PAPI_BUILD_OPTIONS}
     RESULT_VARIABLE _pip_result
   )
   if(NOT _pip_result EQUAL 0)
