@@ -38,7 +38,9 @@ static void rn_nodeprint(struct radix_node *, rn_printer_t, void *,
 static void rn_treeprint(struct radix_node_head *, rn_printer_t, void *);
 #endif /* RN_DEBUG */
 
+#ifndef MIN
 #define MIN(x,y) (((x)<(y))?(x):(y))
+#endif
 
 static struct radix_mask*
 rm_alloc (void)

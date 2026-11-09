@@ -103,7 +103,13 @@
 #define __clib_noclone		  __attribute__ ((noclone))
 #endif
 #define __clib_aligned(x) __attribute__ ((aligned(x)))
+#ifdef __APPLE__
+/* These annotations partition dispatch functions on ELF. Mach-O puts each
+ * function in its own linker atom without requiring named ELF sections. */
+#define __clib_section(s)
+#else
 #define __clib_section(s) __attribute__ ((section(s)))
+#endif
 #define __clib_warn_unused_result __attribute__ ((warn_unused_result))
 #define __clib_export __attribute__ ((visibility("default")))
 #ifdef __clang__

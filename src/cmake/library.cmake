@@ -39,6 +39,9 @@ macro(add_vpp_library lib)
 
   # library deps
   if(ARG_LINK_LIBRARIES)
+    if(APPLE)
+      list(REMOVE_ITEM ARG_LINK_LIBRARIES rt dl)
+    endif()
     target_link_libraries(${lib} ${ARG_LINK_LIBRARIES})
   endif()
   # install .so

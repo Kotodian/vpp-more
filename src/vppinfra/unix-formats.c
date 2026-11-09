@@ -253,7 +253,7 @@ u8 * format_sockaddr (u8 * s, va_list * args)
   return s;
 }
 
-#ifndef __APPLE__
+#ifndef __KERNEL__
 
 #ifndef __KERNEL__
 u8 * format_timeval (u8 * s, va_list * args)

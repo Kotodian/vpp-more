@@ -301,7 +301,36 @@ static inline int clib_cpu_supports_ ## flag() { return 0; }
 foreach_x86_64_flags
 #undef _
 #endif /* __x86_64__ */
-#if defined(__aarch64__)
+#if defined(__aarch64__) && defined(__APPLE__)
+#include <sys/sysctl.h>
+static inline int
+clib_cpu_darwin_feature (const char *flag)
+{
+  const struct { const char *flag; const char *sysctl; } features[] = {
+    { "fp", "hw.optional.floatingpoint" },
+    { "asimd", "hw.optional.neon" },
+    { "aarch64_aes", "hw.optional.arm.FEAT_AES" },
+    { "pmull", "hw.optional.arm.FEAT_PMULL" },
+    { "sha1", "hw.optional.arm.FEAT_SHA1" },
+    { "sha2", "hw.optional.arm.FEAT_SHA256" },
+    { "crc32", "hw.optional.armv8_crc32" },
+    { "atomics", "hw.optional.arm.FEAT_LSE" },
+    { "sha512", "hw.optional.arm.FEAT_SHA512" },
+  };
+  for (unsigned i = 0; i < sizeof (features) / sizeof (features[0]); i++)
+    if (__builtin_strcmp (flag, features[i].flag) == 0)
+      {
+        int value = 0;
+        size_t size = sizeof (value);
+        return sysctlbyname (features[i].sysctl, &value, &size, 0, 0) == 0 && value;
+      }
+  return 0;
+}
+#define _(flag, hwcap_at, bit) \
+  static inline int clib_cpu_supports_##flag (void) { return clib_cpu_darwin_feature (#flag); }
+foreach_aarch64_flags
+#undef _
+#elif defined(__aarch64__)
 #include <sys/auxv.h>
 #define _(flag, hwcap_at, bit)                                                                     \
   static inline int clib_cpu_supports_##flag ()                                                    \

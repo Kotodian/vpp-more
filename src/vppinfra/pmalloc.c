@@ -333,6 +333,18 @@ pmalloc_update_lookup_table (clib_pmalloc_main_t *pm, u32 first, u32 count)
       pm->lookup_table[p] = meme.me_vaddr - meme.me_paddr;
       p++;
     }
+#elif defined(__APPLE__)
+  uword p;
+  u32 elts_per_page = 1U << (pm->def_log2_page_sz - pm->lookup_log2_page_sz);
+  vec_validate_aligned (pm->lookup_table,
+                        vec_len (pm->pages) * elts_per_page - 1,
+                        CLIB_CACHE_LINE_BYTES);
+  /* No DMA/pagemap support: retain the upstream virtual-address fallback. */
+  for (p = (uword) first * elts_per_page;
+       p < (uword) (first + count) * elts_per_page; p++)
+    pm->lookup_table[p] =
+      pointer_to_uword (pm->base) + (p << pm->lookup_log2_page_sz);
+  goto done;
 #else
 #error "Unsupported OS"
 #endif

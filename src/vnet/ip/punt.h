@@ -12,9 +12,9 @@
 
 #ifdef __linux__
 #include <linux/un.h>
-#elif __FreeBSD__
+#elif defined(__FreeBSD__) || defined(__APPLE__)
 #include <sys/un.h>
-#define UNIX_PATH_MAX SUNPATHLEN
+#define UNIX_PATH_MAX (sizeof (((struct sockaddr_un *) 0)->sun_path))
 #endif /* __linux__ */
 #include <stdbool.h>
 #include <vnet/ip/ip.h>

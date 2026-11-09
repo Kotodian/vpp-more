@@ -870,7 +870,18 @@ punt_config (vlib_main_t * vm, unformat_input_t * input)
 
   /* UNIX domain socket */
   struct sockaddr_un addr;
+#ifdef __APPLE__
+  pm->socket_fd = socket (AF_UNIX, SOCK_DGRAM, 0);
+  if (pm->socket_fd != -1 &&
+      fcntl (pm->socket_fd, F_SETFL, O_NONBLOCK) == -1)
+    {
+      close (pm->socket_fd);
+      pm->socket_fd = -1;
+    }
+  if (pm->socket_fd == -1)
+#else
   if ((pm->socket_fd = socket (AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK, 0)) == -1)
+#endif
     {
       return clib_error_return (0, "socket error");
     }

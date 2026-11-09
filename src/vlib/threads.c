@@ -182,13 +182,19 @@ os_get_nthreads (void)
 void
 vlib_set_thread_name (char *name)
 {
+#ifndef __APPLE__
   int pthread_setname_np (pthread_t __target_thread, const char *__name);
+#endif
   int rv;
   pthread_t thread = pthread_self ();
 
   if (thread)
     {
+#ifdef __APPLE__
+      rv = pthread_setname_np (name);
+#else
       rv = pthread_setname_np (thread, name);
+#endif
       if (rv)
 	clib_warning ("pthread_setname_np returned %d", rv);
     }
@@ -302,7 +308,9 @@ vlib_thread_init (vlib_main_t * vm)
   w->thread_mheap = clib_mem_get_heap ();
   w->thread_stack = vlib_thread_stacks[0];
   w->cpu_id = tm->main_lcore;
-#ifdef __FreeBSD__
+#ifdef __APPLE__
+  w->lwp = vpp_darwin_thread_id ();
+#elif defined(__FreeBSD__)
   w->lwp = pthread_getthreadid_np ();
 #else
   w->lwp = syscall (SYS_gettid);
@@ -475,7 +483,9 @@ vlib_worker_thread_bootstrap_fn (void *arg)
 {
   vlib_worker_thread_t *w = arg;
 
-#ifdef __FreeBSD__
+#ifdef __APPLE__
+  w->lwp = vpp_darwin_thread_id ();
+#elif defined(__FreeBSD__)
   w->lwp = pthread_getthreadid_np ();
 #else
   w->lwp = syscall (SYS_gettid);

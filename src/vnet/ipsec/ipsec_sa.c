@@ -890,7 +890,11 @@ ipsec_sa_add_and_lock (u32 id, u32 spi, ipsec_protocol_t proto,
 
   key_alg = ((flags & IPSEC_SA_FLAG_USE_ESN) && m->esn_alg) ? m->esn_alg : m->alg;
 
+#ifdef __APPLE__
+  if (getentropy (rand, sizeof (rand)) != 0)
+#else
   if (getrandom (rand, sizeof (rand), 0) != sizeof (rand))
+#endif
     return VNET_API_ERROR_INIT_FAILED;
 
   pool_get_aligned_zero (im->sa_pool, sa, CLIB_CACHE_LINE_BYTES);

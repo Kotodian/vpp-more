@@ -15,6 +15,13 @@
 #include <vnet/session/session_debug.h>
 #include <svm/queue.h>
 #include <sys/timerfd.h>
+#ifdef __APPLE__
+struct itimerspec
+{
+  struct timespec it_interval;
+  struct timespec it_value;
+};
+#endif
 
 static inline void
 session_wrk_send_evt_to_main (session_worker_t *wrk, session_evt_elt_t *elt)

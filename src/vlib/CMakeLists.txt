@@ -67,6 +67,8 @@ set(PLATFORM_SOURCES
 set(PLATFORM_HEADERS
   linux/vfio.h
 )
+elseif(APPLE)
+set(PLATFORM_SOURCES darwin/pci.c)
 elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "FreeBSD")
 set(PLATFORM_SOURCES
   freebsd/pci.c
@@ -84,6 +86,11 @@ if (LIBIBERTY_INCLUDE_DIR AND LIBUNWIND_LIB)
   add_definitions(-DHAVE_LIBIBERTY)
 else()
   message(WARNING "libiberty not found - stack trace demangle disabled")
+endif()
+
+set(VLIB_FUSE_SOURCE unix/fuse.c)
+if(APPLE)
+  set(VLIB_FUSE_SOURCE "")
 endif()
 
 add_vpp_library(vlib
@@ -123,7 +130,7 @@ add_vpp_library(vlib
   time.c
   trace.c
   unix/cli.c
-  unix/fuse.c
+  ${VLIB_FUSE_SOURCE}
   unix/main.c
   unix/plugin.c
   unix/util.c

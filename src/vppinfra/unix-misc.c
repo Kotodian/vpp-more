@@ -12,6 +12,9 @@
 #include <vppinfra/bitmap.h>
 #include <vppinfra/unix.h>
 #include <vppinfra/format.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #ifdef __linux__
 #include <vppinfra/linux/sysfs.h>
 #include <sched.h>
@@ -461,6 +464,12 @@ os_get_exec_path ()
 
   if (sz <= 0)
     return 0;
+#elif defined(__APPLE__)
+  uint32_t capacity = PATH_MAX;
+  char tmp[PATH_MAX];
+  if (_NSGetExecutablePath (tmp, &capacity) != 0)
+    return 0;
+  size_t sz = strlen (tmp);
 #else
   char tmp[MAXPATHLEN];
   int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };

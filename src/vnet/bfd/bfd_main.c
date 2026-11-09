@@ -1424,7 +1424,11 @@ bfd_main_init (vlib_main_t * vm)
    * values) from the kernel CSPRNG, so that the seed is independent per VPP
    * instance. Fail initialization if entropy cannot be obtained.
    */
+#ifdef __APPLE__
+  if (getentropy (&bm->random_seed, sizeof (bm->random_seed)) != 0)
+#else
   if (getrandom (&bm->random_seed, sizeof (bm->random_seed), 0) != sizeof (bm->random_seed))
+#endif
     return clib_error_return (0, "getrandom() failed to seed BFD PRNG");
   bm->vlib_main = vm;
   bm->vnet_main = vnet_get_main ();

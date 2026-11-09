@@ -1425,6 +1425,12 @@ if(VPP_LIBVNET_HIDDEN_VISIBILITY)
   set(_vnet_library_visibility HIDDEN)
 endif()
 
+if(APPLE)
+  list(REMOVE_ITEM VNET_SOURCES devices/netlink.c dev/bus/pci.c)
+  list(FILTER VNET_SOURCES EXCLUDE REGEX "^devices/virtio/")
+  list(FILTER VNET_MULTIARCH_SOURCES EXCLUDE REGEX "^devices/virtio/")
+endif()
+
 add_vpp_library(vnet
   ${_vnet_library_visibility}
   SOURCES ${VNET_SOURCES}

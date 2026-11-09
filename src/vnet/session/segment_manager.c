@@ -195,8 +195,12 @@ segment_manager_add_segment_inline (segment_manager_t *sm, uword segment_size,
 
   if (props->no_dump_segments || smm->no_dump_segments)
     {
+#ifdef MADV_DONTDUMP
       if (madvise (fs->ssvm.sh, fs->ssvm.ssvm_size, MADV_DONTDUMP) != 0)
 	clib_warning ("madvise MADV_DONTDUMP failed for seg %s", seg_name);
+#else
+      clib_warning ("excluding shared segments from core dumps is unsupported");
+#endif
     }
 
   /*
