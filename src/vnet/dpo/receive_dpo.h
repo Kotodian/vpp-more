@@ -40,7 +40,7 @@ typedef struct receive_dpo_t_
 
 extern int dpo_is_receive(const dpo_id_t *dpo);
 
-extern void receive_dpo_add_or_lock (dpo_proto_t proto,
+__clib_export extern void receive_dpo_add_or_lock (dpo_proto_t proto,
                                      u32 sw_if_index,
                                      const ip46_address_t *nh_addr,
                                      dpo_id_t *dpo);

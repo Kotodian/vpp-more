@@ -335,6 +335,7 @@ help:
 	@echo " build                - build debug binaries"
 	@echo " build-release        - build release binaries"
 	@echo " release              - alias for build-release"
+	@echo " test-rust            - build and smoke-test sibling Rust plugins"
 	@echo " build-coverity       - build coverity artifacts"
 	@echo " build-gcov 		 - build gcov vpp only"
 	@echo " rebuild              - wipe and build debug binaries"
@@ -573,6 +574,10 @@ endif
 
 .PHONY: release
 release: build-release
+
+.PHONY: test-rust
+test-rust: build
+	@cmake --build "$(BR)/build-$(PLATFORM)_debug-native/vpp" --target rust_smoke
 
 .PHONY: build-gcov
 build-gcov: $(BR)/.deps.ok

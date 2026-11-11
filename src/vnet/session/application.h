@@ -294,7 +294,7 @@ session_t *app_listener_get_local_session (app_listener_t * al);
 session_t *app_listener_get_wrk_cl_session (app_listener_t *al, u32 wrk_index);
 
 __clib_export application_t *application_get (u32 index);
-application_t *application_get_if_valid (u32 index);
+__clib_export application_t *application_get_if_valid (u32 index);
 application_t *application_lookup (u32 api_client_index);
 __clib_export application_t *application_lookup_name (const u8 *name);
 __clib_export app_worker_t *application_get_worker (application_t *app, u32 wrk_index);
@@ -410,7 +410,7 @@ u8 *format_app_worker_listener (u8 *s, va_list *args);
 u8 *format_crypto_context (u8 * s, va_list * args);
 uword unformat_app_index (unformat_input_t *input, va_list *args);
 void app_worker_format_connects (app_worker_t * app_wrk, int verbose);
-session_error_t vnet_app_worker_add_del (vnet_app_worker_add_del_args_t *a);
+__clib_export session_error_t vnet_app_worker_add_del (vnet_app_worker_add_del_args_t *a);
 
 uword unformat_application_proto (unformat_input_t * input, va_list * args);
 

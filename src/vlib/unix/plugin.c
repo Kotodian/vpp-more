@@ -9,6 +9,10 @@
 #include <vppinfra/elf.h>
 #include <dlfcn.h>
 #include <dirent.h>
+#ifdef __APPLE__
+#include <mach-o/loader.h>
+#include <vppinfra/unix.h>
+#endif
 
 plugin_main_t vlib_plugin_main;
 
@@ -153,6 +157,86 @@ r2_to_reg (elf_main_t *em, vlib_plugin_r2_t *r2,
  * inspect a (presumed) plugin.so file, looking for load order constraints.
  * Works with both .vlib_plugin_registration and .vlib_plugin_r2 initializers
  */
+/* Read registration before dlopen so disabled/version-mismatched plugins never
+ * execute constructors. The Rust registration format has no load_after field.
+ * Keep ELF handling unchanged; native Mach-O plugins use __DATA,__vlib_reg. */
+#ifdef __APPLE__
+static int
+darwin_read_plugin_registration (plugin_info_t *pi, u8 **data)
+{
+  u8 *file = 0;
+  clib_error_t *error = clib_file_contents ((char *) pi->filename, &file);
+  *data = 0;
+  if (error)
+    {
+      clib_error_free (error);
+      return -1;
+    }
+  if (vec_len (file) < sizeof (struct mach_header_64))
+    goto invalid;
+  const struct mach_header_64 *header = (const void *) file;
+  if (header->magic != MH_MAGIC_64 || header->filetype != MH_DYLIB ||
+      header->sizeofcmds > vec_len (file) - sizeof (*header))
+    goto invalid;
+#if defined(__aarch64__)
+  if (header->cputype != CPU_TYPE_ARM64)
+    goto invalid;
+#elif defined(__x86_64__)
+  if (header->cputype != CPU_TYPE_X86_64)
+    goto invalid;
+#endif
+  uword offset = sizeof (*header);
+  uword end = offset + header->sizeofcmds;
+  for (u32 i = 0; i < header->ncmds; i++)
+    {
+      if (offset > end || end - offset < sizeof (struct load_command))
+        goto invalid;
+      const struct load_command *command = (const void *) (file + offset);
+      if (command->cmdsize < sizeof (*command) || command->cmdsize > end - offset ||
+          command->cmdsize % 8)
+        goto invalid;
+      if (command->cmd == LC_SEGMENT_64)
+        {
+          if (command->cmdsize < sizeof (struct segment_command_64))
+            goto invalid;
+          const struct segment_command_64 *segment = (const void *) command;
+          if (segment->nsects > (command->cmdsize - sizeof (*segment)) /
+                                  sizeof (struct section_64))
+            goto invalid;
+          const struct section_64 *sections = (const void *) (segment + 1);
+          for (u32 j = 0; j < segment->nsects; j++)
+            {
+              const struct section_64 *section = sections + j;
+              if (strncmp (section->segname, "__DATA", 16) ||
+                  strncmp (section->sectname, "__vlib_reg", 16))
+                continue;
+              if (section->size < sizeof (vlib_plugin_registration_t) ||
+                  section->offset > vec_len (file) ||
+                  sizeof (vlib_plugin_registration_t) > vec_len (file) - section->offset)
+                goto invalid;
+              vec_validate_aligned (*data, sizeof (vlib_plugin_registration_t) - 1,
+                                    CLIB_CACHE_LINE_BYTES);
+              clib_memcpy_fast (*data, file + section->offset,
+                               sizeof (vlib_plugin_registration_t));
+              vlib_plugin_registration_t *reg = (void *) *data;
+              if (reg->load_after)
+                {
+                  PLUGIN_LOG_ERR ("Mach-O load_after constraints unsupported: %s", pi->name);
+                  vec_free (*data);
+                  goto invalid;
+                }
+              vec_free (file);
+              return 0;
+            }
+        }
+      offset += command->cmdsize;
+    }
+invalid:
+  vec_free (file);
+  return -1;
+}
+
+#endif
 static int
 find_plugin_load_order_constraints (plugin_main_t *pm, plugin_info_t *pi, int from_early_init)
 {
@@ -165,6 +249,15 @@ find_plugin_load_order_constraints (plugin_main_t *pm, plugin_info_t *pi, int fr
   vlib_plugin_r2_t *r2;
   plugin_config_t *pc = 0;
   uword *p;
+
+#ifdef __APPLE__
+  if (darwin_read_plugin_registration (pi, &data))
+    return -1;
+  reg = (void *) data;
+  if (pm->plugins_default_disable)
+    reg->default_disabled = 1;
+  goto process_reg;
+#endif
 
   if (elf_read_file (&em, (char *) pi->filename))
     return -1;
@@ -389,6 +482,15 @@ load_one_plugin (plugin_main_t * pm, plugin_info_t * pi, int from_early_init)
   plugin_config_t *pc = 0;
   uword *p;
 
+#ifdef __APPLE__
+  if (darwin_read_plugin_registration (pi, &data))
+    return -1;
+  reg = (void *) data;
+  if (pm->plugins_default_disable)
+    reg->default_disabled = 1;
+  goto process_reg;
+#endif
+
   if (elf_read_file (&em, (char *) pi->filename))
     return -1;
 
@@ -581,7 +683,16 @@ process_reg:
   pi->handle = handle;
 
   if (reread_reg)
-    reg = dlsym (pi->handle, "vlib_plugin_registration");
+    {
+      reg = dlsym (pi->handle, "vlib_plugin_registration");
+      if (!reg)
+        {
+          PLUGIN_LOG_ERR ("Plugin registration symbol missing: %s", pi->name);
+          dlclose (pi->handle);
+          pi->handle = 0;
+          goto error;
+        }
+    }
 
   pi->reg = reg;
   pi->version = str_array_to_vec ((char *) &reg->version,

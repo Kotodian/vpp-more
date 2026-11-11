@@ -55,9 +55,18 @@ epoll-shim dynamic library.
 ``compile_commands.json``.
 
 The native make entry points pass ``VPP_PLUGINS=none`` and
-``VPP_API_TEST_BUILTIN=OFF`` by default. No dataplane plugins, VAT/API test
-plugins or builtin VAT test support are built. Plugin sources remain in the
-tree. ``VPP_EXTRA_CMAKE_ARGS`` can override these settings in a later build.
+``VPP_API_TEST_BUILTIN=OFF`` by default for the regular C plugin collection and
+builtin VAT test support. When a sibling ``vpp-plugin-rs`` checkout exists,
+``make build`` and ``make release`` also build and install its Rust example and
+test plugins through the same CMake graph. Cargo/Rust must be available. CMake
+passes the matching generated headers, ABI definitions, Darwin SDK and library
+paths automatically. ``VPP_BUILD_RUST_PLUGINS=OFF`` disables this integration;
+``VPP_RUST_PLUGIN_PACKAGES`` selects its Rust cdylib packages.
+
+``make test-rust`` builds debug VPP and runs the routing, session and Tokio bridge
+FIFO smoke tests twice. The Darwin loader reads the Rust plugin's Mach-O
+registration metadata before loading it. The initial native plugin format does
+not support r2 registrations or non-null ``load_after`` constraints.
 
 Scope
 -----

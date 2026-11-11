@@ -426,6 +426,15 @@ foreach(DIR ${SUBDIRS})
   add_subdirectory(${DIR} ${VPP_BINARY_DIR}/${DIR})
 endforeach()
 
+# Build the sibling Rust plugin workspace through the same Make/CMake graph.
+# An absent checkout leaves ordinary VPP builds unchanged.
+set(VPP_RUST_PLUGIN_DIR "${CMAKE_SOURCE_DIR}/../../vpp-plugin-rs"
+  CACHE PATH "Rust plugin framework checkout")
+option(VPP_BUILD_RUST_PLUGINS "Build available sibling Rust plugins" ON)
+if(VPP_BUILD_RUST_PLUGINS AND EXISTS "${VPP_RUST_PLUGIN_DIR}/CMakeLists.txt")
+  add_subdirectory("${VPP_RUST_PLUGIN_DIR}" "${VPP_BINARY_DIR}/rust-plugins")
+endif()
+
 get_property(_vpp_tools_list GLOBAL PROPERTY VPP_TOOLS_LIST)
 list(REMOVE_DUPLICATES _vpp_tools_list)
 list(SORT _vpp_tools_list)

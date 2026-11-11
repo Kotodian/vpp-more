@@ -142,9 +142,15 @@ void *vlib_get_plugin_symbol (const char *plugin_name,
 			      const char *symbol_name);
 u8 *vlib_get_vat_plugin_path (void);
 
+#ifdef __APPLE__
+#define VLIB_PLUGIN_REGISTER() \
+  vlib_plugin_registration_t vlib_plugin_registration \
+  __clib_export __attribute__ ((section ("__DATA,__vlib_reg")))
+#else
 #define VLIB_PLUGIN_REGISTER() \
   vlib_plugin_registration_t vlib_plugin_registration \
   __clib_export __clib_section(".vlib_plugin_registration")
+#endif
 
 /* Call a plugin init function: used for init function dependencies. */
 #define vlib_call_plugin_init_function(vm,p,x)                  \

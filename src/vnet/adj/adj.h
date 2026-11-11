@@ -362,7 +362,7 @@ STATIC_ASSERT ((STRUCT_OFFSET_OF (ip_adjacency_t, sub_type.nbr.next_hop) ==
  * @brief
  *   Take a reference counting lock on the adjacency
  */
-extern void adj_lock(adj_index_t adj_index);
+__clib_export extern void adj_lock(adj_index_t adj_index);
 /**
  * @brief
  *   Release a reference counting lock on the adjacency
